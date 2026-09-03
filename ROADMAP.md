@@ -8,7 +8,7 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 - [x] Normalized exact-match evaluator
 - [x] Case-level evidence and pass-rate release gate
 - [x] Offline CLI with JSON reports and meaningful exit status
-- [ ] Dataset provenance and content-addressed fingerprints
+- [x] Dataset provenance and content-addressed fingerprints
 - [ ] Metric registry with exact, contains, and bounded regular-expression checks
 - [ ] Declarative metric and threshold policies
 - [ ] Baseline-versus-candidate regression analysis

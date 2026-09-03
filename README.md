@@ -21,7 +21,10 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Finite minimum pass-rate validation
 - Ordered case-level evidence containing expected and actual outputs
 - Pass/fail release decision using an explicit threshold
-- JSON report output
+- JSON report output with canonical suite and candidate SHA-256 digests
+- Deterministic run IDs bound to content-addressed inputs and versioned evaluator semantics
+- Strict, versioned dataset manifests with lineage and suite-integrity validation
+- Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
 - Nonzero CLI exit status when a release gate fails
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
@@ -37,6 +40,7 @@ git clone https://github.com/navaneeth9908/evalforge.git
 cd evalforge
 uv sync --group dev
 uv run evalforge evaluate examples/suite.json examples/outputs.json \
+  --dataset-manifest examples/dataset-manifest.json \
   --report-path reports/example.json
 ```
 
@@ -48,7 +52,7 @@ Pass rate: 100.00%
 Release gate: PASS
 ```
 
-Generated reports are intentionally ignored by Git. Review `reports/example.json` locally for the aggregate verdict and ordered case-level evidence.
+Generated reports are intentionally ignored by Git. Review `reports/example.json` locally for the aggregate verdict, ordered case-level evidence, canonical input digests, deterministic run ID, and a minimal dataset summary. Full manifest lineage is validated and content-addressed but is not copied into reports because source locations and creator identities can be sensitive. The `--dataset-manifest` option is optional so existing CLI invocations remain valid; suite and candidate digests and a run ID are always emitted.
 
 ## Input contract
 
@@ -79,6 +83,8 @@ Candidate outputs are a JSON object keyed by case ID:
 
 The exact-match metric trims surrounding whitespace and performs Unicode-aware case folding. It does not perform semantic matching. Every suite case must have exactly one candidate output, and unregistered outputs are rejected to prevent accounting drift.
 
+An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
+
 ## Release-gate behavior
 
 EvalForge calculates:
@@ -88,7 +94,7 @@ pass_rate = passed_cases / total_cases
 release_ready = pass_rate >= minimum_pass_rate
 ```
 
-The report is written for both passing and failing evaluations. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
+The report is written for both passing and failing evaluations. Report schema version `2` retains the aggregate and case-result fields and adds canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. The evaluation-semantics version includes the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
 
 ## Architecture
 

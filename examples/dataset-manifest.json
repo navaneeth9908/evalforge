@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "dataset_id": "support-policy-smoke",
+  "dataset_version": "1.0.0",
+  "suite_sha256": "63fa9a7bb0462d25f5c70c914384ff2ff0dc4cf529428d715d37ee4c72eec5de",
+  "lineage": {
+    "source": "synthetic://evalforge/support-policy-smoke",
+    "source_revision": "example-v1",
+    "created_by": "EvalForge maintainers",
+    "license": "CC0-1.0",
+    "transformations": [
+      "Hand-authored synthetic support-policy examples"
+    ]
+  }
+}

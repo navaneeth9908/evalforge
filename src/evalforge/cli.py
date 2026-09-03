@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import json
+from math import isfinite
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from pydantic import ValidationError
 
-from evalforge.contracts import EvaluationSuite
+from evalforge.contracts import DatasetManifest, EvaluationSuite
 from evalforge.engine import evaluate_suite
+from evalforge.provenance import (
+    CANONICALIZATION_VERSION,
+    EVALUATION_SEMANTICS_VERSION,
+    JsonValue,
+    canonical_json_sha256,
+    deterministic_run_id,
+)
+
+MAX_JSON_BYTES = 1024 * 1024
+MAX_JSON_DEPTH = 64
+MAX_JSON_NODES = 100_000
+MAX_JSON_STRING_CHARS = 65_536
+MAX_JSON_NUMBER_CHARS = 256
 
 app = typer.Typer(
     no_args_is_help=True, help="Evaluate AI-system outputs and enforce release gates."
@@ -19,6 +33,10 @@ app = typer.Typer(
 
 class _DuplicateJsonKeyError(ValueError):
     """Raised when JSON object pairs contain an ambiguous duplicate key."""
+
+
+class _UnsafeJsonError(ValueError):
+    """Raised when JSON exceeds deterministic resource or Unicode limits."""
 
 
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -30,18 +48,77 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+def _bounded_json_integer(raw_value: str) -> int:
+    if len(raw_value) > MAX_JSON_NUMBER_CHARS:
+        raise _UnsafeJsonError("JSON number exceeds length limit")
+    return int(raw_value)
+
+
+def _bounded_json_float(raw_value: str) -> float:
+    if len(raw_value) > MAX_JSON_NUMBER_CHARS:
+        raise _UnsafeJsonError("JSON number exceeds length limit")
+    value = float(raw_value)
+    if not isfinite(value):
+        raise _UnsafeJsonError("JSON number must be finite")
+    return value
+
+
+def _reject_json_constant(raw_value: str) -> None:
+    raise _UnsafeJsonError(f"JSON constant {raw_value!r} is not permitted")
+
+
+def _validate_json_safety(value: object) -> None:
+    stack: list[tuple[object, int]] = [(value, 0)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_JSON_NODES or depth > MAX_JSON_DEPTH:
+            raise _UnsafeJsonError("JSON exceeds structural limits")
+        if isinstance(item, str):
+            if len(item) > MAX_JSON_STRING_CHARS:
+                raise _UnsafeJsonError("JSON string exceeds length limit")
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise _UnsafeJsonError("JSON contains an invalid Unicode scalar value") from exc
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                stack.append((key, depth + 1))
+                stack.append((child, depth + 1))
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1) for child in item)
+
+
 def _read_json(path: Path, *, label: str) -> object:
     try:
-        return json.loads(
-            path.read_text(encoding="utf-8"),
+        with path.open("rb") as source:
+            raw = source.read(MAX_JSON_BYTES + 1)
+        if len(raw) > MAX_JSON_BYTES:
+            raise _UnsafeJsonError("JSON file exceeds byte limit")
+        value = json.loads(
+            raw.decode("utf-8"),
             object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+            parse_float=_bounded_json_float,
+            parse_int=_bounded_json_integer,
         )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonKeyError) as exc:
-        message = (
-            "outputs file is not valid JSON or is ambiguous"
-            if label == "outputs"
-            else "suite file is invalid or ambiguous"
-        )
+        _validate_json_safety(value)
+        return value
+    except (
+        OSError,
+        RecursionError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _DuplicateJsonKeyError,
+        _UnsafeJsonError,
+    ) as exc:
+        messages = {
+            "outputs": "outputs file is not valid JSON or is ambiguous",
+            "suite": "suite file is invalid or ambiguous",
+            "manifest": "dataset manifest is invalid or ambiguous",
+        }
+        message = messages[label]
         raise typer.BadParameter(message) from exc
 
 
@@ -55,10 +132,12 @@ def evaluate_command(
     suite_path: Path,
     outputs_path: Path,
     report_path: Annotated[Path, typer.Option()] = Path("reports/evaluation.json"),
+    dataset_manifest: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     """Evaluate candidate outputs against a versioned deterministic suite."""
+    raw_suite = _read_json(suite_path, label="suite")
     try:
-        suite = EvaluationSuite.model_validate(_read_json(suite_path, label="suite"))
+        suite = EvaluationSuite.model_validate(raw_suite)
     except ValidationError as exc:
         raise typer.BadParameter("suite file is invalid or ambiguous") from exc
 
@@ -68,6 +147,29 @@ def evaluate_command(
     ):
         raise typer.BadParameter("outputs must be a JSON object mapping case IDs to strings")
 
+    suite_payload = cast(JsonValue, raw_suite)
+    candidate_payload = cast(JsonValue, raw_outputs)
+    suite_sha256 = canonical_json_sha256(suite_payload)
+    candidate_sha256 = canonical_json_sha256(candidate_payload)
+
+    dataset_summary: dict[str, str] | None = None
+    manifest_sha256: str | None = None
+    if dataset_manifest is not None:
+        raw_manifest = _read_json(dataset_manifest, label="manifest")
+        try:
+            manifest = DatasetManifest.model_validate(raw_manifest)
+        except ValidationError as exc:
+            raise typer.BadParameter("dataset manifest is invalid or ambiguous") from exc
+        if manifest.suite_sha256 != suite_sha256:
+            raise typer.BadParameter("dataset manifest suite digest does not match suite content")
+        manifest_payload = cast(JsonValue, raw_manifest)
+        manifest_sha256 = canonical_json_sha256(manifest_payload)
+        dataset_summary = {
+            "dataset_id": manifest.dataset_id,
+            "dataset_version": manifest.dataset_version,
+            "license": manifest.lineage.license,
+        }
+
     try:
         report = evaluate_suite(
             suite.cases,
@@ -76,7 +178,22 @@ def evaluate_command(
         )
     except ValueError as exc:
         raise typer.BadParameter("evaluation input is invalid or ambiguous") from exc
-    payload = {"suite_name": suite.name, **report.model_dump(mode="json")}
+    payload = {
+        "suite_name": suite.name,
+        **report.model_dump(mode="json"),
+        "schema_version": 2,
+        "suite_sha256": suite_sha256,
+        "candidate_sha256": candidate_sha256,
+        "dataset_manifest_sha256": manifest_sha256,
+        "dataset": dataset_summary,
+        "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "run_id": deterministic_run_id(
+            suite_sha256=suite_sha256,
+            candidate_sha256=candidate_sha256,
+            dataset_manifest_sha256=manifest_sha256,
+        ),
+    }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
 
