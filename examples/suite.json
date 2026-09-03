@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "name": "support-policy-smoke",
+  "minimum_pass_rate": 1.0,
+  "cases": [
+    {
+      "case_id": "refund-window",
+      "prompt": "How long is the refund window?",
+      "expected_output": "30 days"
+    },
+    {
+      "case_id": "account-sharing",
+      "prompt": "Can customers share accounts?",
+      "expected_output": "No"
+    }
+  ]
+}
