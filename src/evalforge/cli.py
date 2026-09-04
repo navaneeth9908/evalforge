@@ -10,7 +10,8 @@ from typing import Annotated, cast
 import typer
 from pydantic import ValidationError
 
-from evalforge.contracts import DatasetManifest, EvaluationSuite
+from evalforge.comparison import compare_evaluations
+from evalforge.contracts import ComparisonPolicy, DatasetManifest, EvaluationSuite
 from evalforge.engine import evaluate_suite
 from evalforge.provenance import (
     CANONICALIZATION_VERSION,
@@ -117,6 +118,7 @@ def _read_json(path: Path, *, label: str) -> object:
             "outputs": "outputs file is not valid JSON or is ambiguous",
             "suite": "suite file is invalid or ambiguous",
             "manifest": "dataset manifest is invalid or ambiguous",
+            "comparison_policy": "comparison policy is invalid or ambiguous",
         }
         message = messages[label]
         raise typer.BadParameter(message) from exc
@@ -174,14 +176,14 @@ def evaluate_command(
         report = evaluate_suite(
             suite.cases,
             raw_outputs,
-            minimum_pass_rate=suite.minimum_pass_rate,
+            policy=suite.resolved_policy,
         )
     except ValueError as exc:
         raise typer.BadParameter("evaluation input is invalid or ambiguous") from exc
     payload = {
         "suite_name": suite.name,
         **report.model_dump(mode="json"),
-        "schema_version": 2,
+        "schema_version": 3,
         "suite_sha256": suite_sha256,
         "candidate_sha256": candidate_sha256,
         "dataset_manifest_sha256": manifest_sha256,
@@ -200,5 +202,85 @@ def evaluate_command(
     typer.echo(f"Evaluation report: {report_path}")
     typer.echo(f"Pass rate: {report.pass_rate:.2%}")
     typer.echo(f"Release gate: {'PASS' if report.release_ready else 'FAIL'}")
+    if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+@app.command("compare")
+def compare_command(
+    suite_path: Path,
+    baseline_outputs_path: Path,
+    candidate_outputs_path: Path,
+    comparison_policy_path: Annotated[Path, typer.Option("--comparison-policy")],
+    report_path: Annotated[Path, typer.Option()] = Path("reports/comparison.json"),
+    baseline_label: Annotated[str, typer.Option()] = "baseline",
+    candidate_label: Annotated[str, typer.Option()] = "candidate",
+) -> None:
+    """Compare candidate outputs with a baseline under versioned regression budgets."""
+    raw_suite = _read_json(suite_path, label="suite")
+    raw_baseline = _read_json(baseline_outputs_path, label="outputs")
+    raw_candidate = _read_json(candidate_outputs_path, label="outputs")
+    raw_policy = _read_json(comparison_policy_path, label="comparison_policy")
+    try:
+        suite = EvaluationSuite.model_validate(raw_suite)
+        comparison_policy = ComparisonPolicy.model_validate(raw_policy)
+    except ValidationError as exc:
+        raise typer.BadParameter("suite or comparison policy is invalid or ambiguous") from exc
+
+    for outputs in (raw_baseline, raw_candidate):
+        if not isinstance(outputs, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in outputs.items()
+        ):
+            raise typer.BadParameter("outputs must be a JSON object mapping case IDs to strings")
+    baseline_outputs = cast(dict[str, str], raw_baseline)
+    candidate_outputs = cast(dict[str, str], raw_candidate)
+
+    try:
+        report = compare_evaluations(
+            suite.cases,
+            baseline_outputs,
+            candidate_outputs,
+            evaluation_policy=suite.resolved_policy,
+            comparison_policy=comparison_policy,
+            baseline_label=baseline_label,
+            candidate_label=candidate_label,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter("comparison input is invalid or ambiguous") from exc
+
+    suite_sha256 = canonical_json_sha256(cast(JsonValue, raw_suite))
+    baseline_sha256 = canonical_json_sha256(cast(JsonValue, raw_baseline))
+    candidate_sha256 = canonical_json_sha256(cast(JsonValue, raw_candidate))
+    comparison_policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
+    comparison_id = canonical_json_sha256(
+        {
+            "schema_version": 1,
+            "suite_sha256": suite_sha256,
+            "baseline_sha256": baseline_sha256,
+            "candidate_sha256": candidate_sha256,
+            "comparison_policy_sha256": comparison_policy_sha256,
+            "baseline_label": report.baseline_label,
+            "candidate_label": report.candidate_label,
+            "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "suite_name": suite.name,
+        "suite_sha256": suite_sha256,
+        "baseline_sha256": baseline_sha256,
+        "candidate_sha256": candidate_sha256,
+        "comparison_policy_sha256": comparison_policy_sha256,
+        "comparison_policy": comparison_policy.model_dump(mode="json"),
+        "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "comparison_id": comparison_id,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    typer.echo(f"Comparison report: {report_path}")
+    typer.echo(f"Pass-rate delta: {report.pass_rate_absolute_delta:+.2%}")
+    typer.echo(f"Comparison gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)

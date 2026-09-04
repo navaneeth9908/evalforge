@@ -12,9 +12,10 @@ Include the affected version, reproduction steps, impact, and any suggested miti
 
 ## Trust boundaries
 
-- Suite, output, and dataset-manifest files are untrusted input and must pass duplicate-key, strict schema, Unicode, finite-number, numeric-literal-length, size, nesting, node-count, and string-length validation.
+- Suite, output, comparison-policy, and dataset-manifest files are untrusted input and must pass duplicate-key, strict schema, Unicode, finite-number, numeric-literal-length, size, nesting, node-count, and string-length validation. Release thresholds and regression budgets reject coercive types; suite policies reject ambiguous legacy/declarative combinations.
+- User-controlled regular expressions use a constrained, length-limited syntax without repetition, grouping, alternation, or optional operators so matching work remains bounded by the input limits.
 - Dataset manifests are metadata, not proof that a source is trustworthy or appropriately licensed; operators must verify claimed lineage.
-- Evaluation reports can contain prompts, model outputs, dataset identifiers, and licenses; treat them as potentially sensitive artifacts. Full manifest source, revision, creator, and transformation lineage is deliberately excluded from reports.
+- Evaluation and comparison reports can contain prompts, baseline and candidate model outputs, labels, dataset identifiers, and licenses; treat them as potentially sensitive artifacts. Full manifest source, revision, creator, and transformation lineage is deliberately excluded from reports.
 - Provider credentials must come from runtime environment variables or an external secret manager.
 - Offline deterministic evaluation requires no API keys or outbound network access.
 - Future model-based judges and tool adapters must document network, data-retention, and prompt-injection boundaries before release.

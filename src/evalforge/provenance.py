@@ -11,7 +11,7 @@ JsonScalar: TypeAlias = bool | int | float | str | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 CANONICALIZATION_VERSION = "evalforge-json-v1"
-EVALUATION_SEMANTICS_VERSION = f"normalized-exact-v1-unicode-{unicodedata.unidata_version}"
+EVALUATION_SEMANTICS_VERSION = f"text-metrics-policy-v1-unicode-{unicodedata.unidata_version}"
 RUN_ID_SCHEMA_VERSION = 1
 
 

@@ -9,9 +9,10 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 - [x] Case-level evidence and pass-rate release gate
 - [x] Offline CLI with JSON reports and meaningful exit status
 - [x] Dataset provenance and content-addressed fingerprints
-- [ ] Metric registry with exact, contains, and bounded regular-expression checks
-- [ ] Declarative metric and threshold policies
-- [ ] Baseline-versus-candidate regression analysis
+- [x] Metric registry with exact, contains, and bounded regular-expression checks
+- [x] Declarative metric and threshold policies
+- [x] Baseline-versus-candidate regression analysis
+- [x] Deterministic two-variant model matrix and ablation summaries
 
 ## Evaluation depth
 
@@ -44,7 +45,7 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 - [ ] GitHub Checks and JUnit release-gate output
 - [ ] SARIF safety findings
 - [ ] Dataset versioning and artifact-integrity verification
-- [ ] Candidate matrix and ablation comparisons
+- [ ] Multi-candidate matrix and higher-order ablation comparisons
 - [ ] Container image, health checks, and deployment guide
 - [ ] Threat model, end-to-end demo, acceptance suite, and release documentation
 
