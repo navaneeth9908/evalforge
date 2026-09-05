@@ -66,7 +66,9 @@ def test_compare_command_writes_deterministic_evidence_and_fails_regression_gate
     assert second.exit_code == 1, second.output
     assert report_path.read_bytes() == first_bytes
     report = json.loads(first_bytes)
-    assert report["schema_version"] == 1
+    assert report["schema_version"] == 2
+    assert report["baseline"]["schema_version"] == 4
+    assert report["candidate"]["schema_version"] == 4
     assert report["baseline_label"] == "production"
     assert report["candidate_label"] == "change-42"
     assert report["suite_sha256"] == canonical_json_sha256(suite)
@@ -79,6 +81,7 @@ def test_compare_command_writes_deterministic_evidence_and_fails_regression_gate
     assert report["budget_failures"][0]["scope"] == "overall"
     assert report["baseline"]["results"][1]["actual_output"] == "yes"
     assert report["candidate"]["results"][1]["actual_output"] == "no"
+    assert "Weighted pass-rate delta: -50.00%" in first.output
     assert "Comparison gate: FAIL" in first.output
 
 

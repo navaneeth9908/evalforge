@@ -94,6 +94,7 @@ def test_weighted_aggregation_and_critical_failures_control_release() -> None:
     )
 
     assert report.pass_rate == 0.5
+    assert report.schema_version == 4
     assert report.total_weight == 10.0
     assert report.passed_weight == 9.0
     assert report.weighted_pass_rate == 0.9

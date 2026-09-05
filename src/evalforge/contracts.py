@@ -283,7 +283,7 @@ class EvaluationReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: int = 1
+    schema_version: Literal[4] = 4
     total_cases: int = Field(ge=1)
     passed_cases: int = Field(ge=0)
     pass_rate: float = Field(ge=0.0, le=1.0)
@@ -343,7 +343,7 @@ class CaseComparison(BaseModel):
 
 
 class MetricComparison(BaseModel):
-    """Mean candidate-minus-baseline score evidence for one metric."""
+    """Weighted-mean candidate-minus-baseline evidence for one metric."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -372,7 +372,7 @@ class ModelMatrixRow(BaseModel):
 
     role: MatrixRole
     label: NonEmptyText
-    pass_rate: float = Field(ge=0.0, le=1.0)
+    weighted_pass_rate: float = Field(ge=0.0, le=1.0)
     metrics: tuple[MatrixMetric, ...]
 
 
@@ -407,13 +407,13 @@ class ComparisonReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     baseline_label: NonEmptyText
     candidate_label: NonEmptyText
     baseline: EvaluationReport
     candidate: EvaluationReport
-    pass_rate_absolute_delta: float = Field(ge=-1.0, le=1.0)
-    pass_rate_relative_delta: float | None
+    weighted_pass_rate_absolute_delta: float = Field(ge=-1.0, le=1.0)
+    weighted_pass_rate_relative_delta: float | None
     case_deltas: tuple[CaseComparison, ...]
     metric_deltas: tuple[MetricComparison, ...]
     model_matrix: tuple[ModelMatrixRow, ModelMatrixRow]

@@ -38,7 +38,9 @@ def test_comparison_reports_case_metric_matrix_and_ablation_deltas() -> None:
         candidate_label="candidate-v2",
     )
 
-    assert report.schema_version == 1
+    assert report.schema_version == 2
+    assert report.baseline.schema_version == 4
+    assert report.candidate.schema_version == 4
     assert [delta.status for delta in report.case_deltas] == [
         "unchanged",
         "regression",
@@ -87,9 +89,55 @@ def test_zero_baseline_has_explicit_relative_delta_and_cannot_regress() -> None:
     assert report.case_deltas[0].absolute_delta == 1.0
     assert report.case_deltas[0].relative_delta is None
     assert report.metric_deltas[0].relative_delta is None
-    assert report.pass_rate_relative_delta is None
+    assert report.weighted_pass_rate_relative_delta is None
     assert report.budget_failures == ()
     assert report.release_ready is True
+
+
+def test_weighted_regressions_drive_overall_metric_and_matrix_evidence() -> None:
+    from evalforge.comparison import compare_evaluations
+    from evalforge.contracts import ComparisonPolicy, EvaluationCase, ReleasePolicy
+
+    cases = [
+        EvaluationCase(
+            case_id="release-critical",
+            prompt="Critical",
+            expected_output="yes",
+            weight=100,
+            severity="high",
+            metric="exact",
+        ),
+        EvaluationCase(
+            case_id="minor",
+            prompt="Minor",
+            expected_output="yes",
+            weight=1,
+            metric="exact",
+        ),
+    ]
+
+    report = compare_evaluations(
+        cases,
+        baseline_outputs={"release-critical": "yes", "minor": "no"},
+        candidate_outputs={"release-critical": "no", "minor": "yes"},
+        evaluation_policy=ReleasePolicy(minimum_pass_rate=0.0),
+        comparison_policy=ComparisonPolicy(
+            schema_version=1,
+            max_absolute_regression=0.0,
+            max_relative_regression=0.0,
+        ),
+    )
+
+    assert report.baseline.pass_rate == report.candidate.pass_rate == 0.5
+    assert report.baseline.weighted_pass_rate == 100 / 101
+    assert report.candidate.weighted_pass_rate == 1 / 101
+    assert report.weighted_pass_rate_absolute_delta == -99 / 101
+    assert report.weighted_pass_rate_relative_delta == -0.99
+    assert [failure.scope for failure in report.budget_failures] == ["overall", "metric"]
+    assert report.metric_deltas[0].baseline_score == 100 / 101
+    assert report.metric_deltas[0].candidate_score == 1 / 101
+    assert [row.weighted_pass_rate for row in report.model_matrix] == [100 / 101, 1 / 101]
+    assert report.release_ready is False
 
 
 def test_absolute_and_relative_budgets_are_independent_and_inclusive() -> None:

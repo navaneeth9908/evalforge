@@ -42,9 +42,10 @@ def _status(baseline: float, candidate: float) -> ComparisonStatus:
 def _metric_means(report: EvaluationReport) -> dict[MetricName, float]:
     means: dict[MetricName, float] = {}
     for metric in registered_metrics():
-        scores = [result.score for result in report.results if result.metric == metric]
-        if scores:
-            means[metric] = sum(scores) / len(scores)
+        results = [result for result in report.results if result.metric == metric]
+        if results:
+            total_weight = sum(result.weight for result in results)
+            means[metric] = sum(result.score * result.weight for result in results) / total_weight
     return means
 
 
@@ -127,8 +128,8 @@ def compare_evaluations(
     overall_failure = _budget_failure(
         scope="overall",
         metric=None,
-        baseline=baseline.pass_rate,
-        candidate=candidate.pass_rate,
+        baseline=baseline.weighted_pass_rate,
+        candidate=candidate.weighted_pass_rate,
         policy=comparison_policy,
     )
     if overall_failure is not None:
@@ -149,7 +150,7 @@ def compare_evaluations(
         return ModelMatrixRow(
             role=role,
             label=label,
-            pass_rate=evaluation.pass_rate,
+            weighted_pass_rate=evaluation.weighted_pass_rate,
             metrics=tuple(
                 MatrixMetric(metric=metric, score=metric_means[metric])
                 for metric in registered_metrics()
@@ -162,8 +163,12 @@ def compare_evaluations(
         candidate_label=candidate_label,
         baseline=baseline,
         candidate=candidate,
-        pass_rate_absolute_delta=candidate.pass_rate - baseline.pass_rate,
-        pass_rate_relative_delta=_relative_delta(baseline.pass_rate, candidate.pass_rate),
+        weighted_pass_rate_absolute_delta=(
+            candidate.weighted_pass_rate - baseline.weighted_pass_rate
+        ),
+        weighted_pass_rate_relative_delta=_relative_delta(
+            baseline.weighted_pass_rate, candidate.weighted_pass_rate
+        ),
         case_deltas=case_deltas,
         metric_deltas=metric_deltas,
         model_matrix=(

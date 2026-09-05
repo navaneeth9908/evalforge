@@ -254,7 +254,7 @@ def compare_command(
     comparison_policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
     comparison_id = canonical_json_sha256(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "suite_sha256": suite_sha256,
             "baseline_sha256": baseline_sha256,
             "candidate_sha256": candidate_sha256,
@@ -280,7 +280,7 @@ def compare_command(
     report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
 
     typer.echo(f"Comparison report: {report_path}")
-    typer.echo(f"Pass-rate delta: {report.pass_rate_absolute_delta:+.2%}")
+    typer.echo(f"Weighted pass-rate delta: {report.weighted_pass_rate_absolute_delta:+.2%}")
     typer.echo(f"Comparison gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)
