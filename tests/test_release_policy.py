@@ -111,6 +111,7 @@ def test_suite_accepts_declarative_policy_and_legacy_threshold_contracts() -> No
         "minimum_pass_rate": 1.0,
         "default_case_threshold": 1.0,
         "metric_thresholds": {},
+        "blocking_severities": ("critical",),
     }
     for ambiguous in (
         {"schema_version": 1, "name": "missing", "cases": [case]},
@@ -203,7 +204,7 @@ def test_cli_applies_declarative_policy_and_serializes_gate_failures(tmp_path: o
 
     assert result.exit_code == 1, result.output
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 4
     assert report["results"][0]["threshold_source"] == "case"
     assert report["gate_failures"] == [
         {"code": "minimum_pass_rate_not_met", "observed": 0.0, "required": 1.0}
@@ -227,6 +228,7 @@ def test_threshold_contracts_are_strict_finite_and_closed_range() -> None:
         "minimum_pass_rate": 0.0,
         "default_case_threshold": 1.0,
         "metric_thresholds": {"exact": 0.0, "contains": 1.0},
+        "blocking_severities": ("critical",),
     }
     invalid_thresholds: tuple[object, ...] = (
         True,

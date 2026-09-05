@@ -64,7 +64,7 @@ def test_evaluation_semantics_identifies_the_runtime_unicode_database() -> None:
     from evalforge.provenance import EVALUATION_SEMANTICS_VERSION
 
     assert (
-        f"text-metrics-policy-v1-unicode-{unicodedata.unidata_version}"
+        f"text-metrics-policy-v2-unicode-{unicodedata.unidata_version}"
     ) == EVALUATION_SEMANTICS_VERSION
 
 

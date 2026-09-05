@@ -183,7 +183,7 @@ def evaluate_command(
     payload = {
         "suite_name": suite.name,
         **report.model_dump(mode="json"),
-        "schema_version": 3,
+        "schema_version": 4,
         "suite_sha256": suite_sha256,
         "candidate_sha256": candidate_sha256,
         "dataset_manifest_sha256": manifest_sha256,
@@ -200,7 +200,7 @@ def evaluate_command(
     report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
 
     typer.echo(f"Evaluation report: {report_path}")
-    typer.echo(f"Pass rate: {report.pass_rate:.2%}")
+    typer.echo(f"Weighted pass rate: {report.weighted_pass_rate:.2%}")
     typer.echo(f"Release gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)

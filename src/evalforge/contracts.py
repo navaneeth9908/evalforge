@@ -40,6 +40,17 @@ OutputText = Annotated[str, StringConstraints(max_length=65536)]
 MetricName = Literal["exact", "contains", "regex"]
 ThresholdSource = Literal["case", "metric", "suite", "legacy"]
 ScoreThreshold = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+CaseWeight = Annotated[float, Field(gt=0.0, le=1_000_000.0, allow_inf_nan=False)]
+Severity = Literal["low", "medium", "high", "critical"]
+SliceLabel = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    ),
+]
 
 
 def _require_json_number(value: object, *, field_name: str) -> object:
@@ -89,6 +100,10 @@ class EvaluationCase(BaseModel):
     expected_output: OutputText
     metric: MetricName = "exact"
     threshold: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    weight: CaseWeight = 1.0
+    severity: Severity = "medium"
+    category: SliceLabel = "uncategorized"
+    tags: tuple[SliceLabel, ...] = Field(default=(), max_length=20)
 
     @field_validator("threshold", mode="before")
     @classmethod
@@ -96,6 +111,18 @@ class EvaluationCase(BaseModel):
         if value is None:
             return value
         return _require_json_number(value, field_name="threshold")
+
+    @field_validator("weight", mode="before")
+    @classmethod
+    def require_numeric_weight(cls, value: object) -> object:
+        return _require_json_number(value, field_name="weight")
+
+    @field_validator("tags")
+    @classmethod
+    def require_unique_tags(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("evaluation case tags must be unique")
+        return value
 
     @model_validator(mode="after")
     def require_valid_metric_expectation(self) -> Self:
@@ -123,6 +150,7 @@ class ReleasePolicy(BaseModel):
     minimum_pass_rate: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     default_case_threshold: float = Field(default=1.0, ge=0.0, le=1.0, allow_inf_nan=False)
     metric_thresholds: dict[MetricName, ScoreThreshold] = Field(default_factory=dict, max_length=3)
+    blocking_severities: tuple[Severity, ...] = ("critical",)
 
     @field_validator("minimum_pass_rate", "default_case_threshold", mode="before")
     @classmethod
@@ -137,6 +165,15 @@ class ReleasePolicy(BaseModel):
         if isinstance(value, dict):
             for threshold in value.values():
                 _require_json_number(threshold, field_name="metric threshold")
+        return value
+
+    @field_validator("blocking_severities")
+    @classmethod
+    def require_unique_blocking_severities(
+        cls, value: tuple[Severity, ...]
+    ) -> tuple[Severity, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("blocking severities must be unique")
         return value
 
 
@@ -209,6 +246,10 @@ class CaseResult(BaseModel):
     metric: MetricName
     threshold: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     threshold_source: ThresholdSource
+    weight: CaseWeight
+    severity: Severity
+    category: SliceLabel
+    tags: tuple[SliceLabel, ...]
     evidence: MetricEvidence
     expected_output: str
     actual_output: str
@@ -219,9 +260,22 @@ class GateFailure(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    code: Literal["minimum_pass_rate_not_met"]
+    code: Literal["minimum_pass_rate_not_met", "release_critical_case_failed"]
     observed: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     required: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+class SliceSummary(BaseModel):
+    """Deterministic weighted quality summary for one category or tag."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: SliceLabel
+    total_cases: int = Field(ge=1)
+    passed_cases: int = Field(ge=0)
+    total_weight: float = Field(gt=0.0, allow_inf_nan=False)
+    passed_weight: float = Field(ge=0.0, allow_inf_nan=False)
+    weighted_pass_rate: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
 
 
 class EvaluationReport(BaseModel):
@@ -233,9 +287,14 @@ class EvaluationReport(BaseModel):
     total_cases: int = Field(ge=1)
     passed_cases: int = Field(ge=0)
     pass_rate: float = Field(ge=0.0, le=1.0)
+    total_weight: float = Field(gt=0.0, allow_inf_nan=False)
+    passed_weight: float = Field(ge=0.0, allow_inf_nan=False)
+    weighted_pass_rate: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     minimum_pass_rate: float = Field(ge=0.0, le=1.0)
     release_ready: bool
     gate_failures: tuple[GateFailure, ...] = ()
+    category_slices: tuple[SliceSummary, ...]
+    tag_slices: tuple[SliceSummary, ...]
     results: tuple[CaseResult, ...]
 
 

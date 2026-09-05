@@ -17,6 +17,9 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Strict, versioned Pydantic contracts for evaluation suites
 - Normalized exact, substring, and bounded regular-expression metrics
 - Declarative suite, metric, and case score thresholds with explicit precedence
+- Positive finite case weights with weighted aggregate release decisions
+- Low, medium, high, and critical severity labels with critical-failure blocking by default
+- Deterministic weighted category and tag slice summaries
 - Non-empty and unique case-ID validation
 - Exact candidate-output accounting with no silent omissions or extras
 - Finite minimum pass-rate validation
@@ -57,7 +60,7 @@ Expected console result:
 
 ```text
 Evaluation report: reports/example.json
-Pass rate: 100.00%
+Weighted pass rate: 100.00%
 Release gate: PASS
 Comparison report: reports/comparison.json
 Pass-rate delta: +50.00%
@@ -87,7 +90,11 @@ An evaluation suite declares its schema version, name, release threshold, and ca
       "prompt": "How long is the refund window?",
       "expected_output": "30 days",
       "metric": "contains",
-      "threshold": 1.0
+      "threshold": 1.0,
+      "weight": 3.0,
+      "severity": "critical",
+      "category": "policy",
+      "tags": ["refunds", "customer-support"]
     }
   ]
 }
@@ -103,7 +110,9 @@ Candidate outputs are a JSON object keyed by case ID:
 
 `metric` selects `exact` (the default), `contains`, or `regex`. Exact and substring metrics trim surrounding whitespace and perform Unicode-aware case folding. Bounded regular expressions trim surrounding whitespace and use case-insensitive matching without rewriting the pattern source; they are limited to 256 characters and deliberately reject repetition, grouping, alternation, and optional operators. This constrained syntax prevents user-controlled patterns from causing unbounded matching work. Substring expectations must remain non-empty after trimming, and exact and substring metrics do not perform semantic matching. Every suite case must have exactly one candidate output, and unregistered outputs are rejected to prevent accounting drift.
 
-A declarative `release_policy` contains the aggregate `minimum_pass_rate`, a suite-wide `default_case_threshold`, and optional `metric_thresholds`. An individual case may set `threshold`. The effective score threshold precedence is **case override → metric override → suite default**; each result records both the effective value and `threshold_source`. All thresholds must be finite JSON numbers in the closed interval `[0, 1]`; booleans and numeric strings are rejected. For backward compatibility, a suite may use the legacy top-level `minimum_pass_rate` instead of `release_policy`. Exactly one of those keys must be supplied with a non-null value; supplying both keys, either key as `null`, or neither key is invalid. Legacy cases default to exact matching with a score threshold of `1.0`.
+A declarative `release_policy` contains the aggregate `minimum_pass_rate`, a suite-wide `default_case_threshold`, optional `metric_thresholds`, and `blocking_severities` (default: `["critical"]`). An individual case may set `threshold`. The effective score threshold precedence is **case override → metric override → suite default**; each result records both the effective value and `threshold_source`. All thresholds must be finite JSON numbers in the closed interval `[0, 1]`; booleans and numeric strings are rejected. For backward compatibility, a suite may use the legacy top-level `minimum_pass_rate` instead of `release_policy`. Exactly one of those keys must be supplied with a non-null value; supplying both keys, either key as `null`, or neither key is invalid. Legacy cases default to exact matching with a score threshold of `1.0`.
+
+Each case also has a positive finite numeric `weight` from greater than zero through `1,000,000` (default `1.0`), a `severity` of `low`, `medium` (default), `high`, or `critical`, one lowercase `category` label (default `uncategorized`), and up to 20 unique lowercase `tags` (default `[]`). Category and tag labels are 1–64 characters and may contain letters, digits, dots, underscores, and hyphens. Zero, negative, Boolean, string, out-of-range, and non-finite weights fail validation. Reports preserve these dimensions on each result and emit category and tag summaries sorted by label, with case counts, total and passing weight, and weighted pass rate. A failed case whose severity appears in `blocking_severities` blocks release even when the aggregate threshold passes.
 
 A comparison policy is a separate strict JSON contract with `schema_version: 1`, `max_absolute_regression`, and `max_relative_regression`. Both budgets are finite numbers in `[0, 1]`. A drop is blocked only when it exceeds a configured budget, so equality is accepted. Relative delta is `(candidate - baseline) / baseline`; it is explicitly `null` when the baseline score is zero. Overall pass rate and every represented metric are budgeted independently.
 
@@ -115,11 +124,12 @@ EvalForge calculates:
 
 ```text
 case_passed = metric_score >= effective_case_threshold
-pass_rate = passed_cases / total_cases
-release_ready = pass_rate >= minimum_pass_rate
+weighted_pass_rate = sum(weight for passed cases) / sum(weight for all cases)
+release_ready = weighted_pass_rate >= minimum_pass_rate
+                and no failed case has a blocking severity
 ```
 
-The report is written for both passing and failing evaluations. Report schema version `3` retains the aggregate and case-result fields, records metric evidence plus each effective threshold and precedence source, emits `gate_failures` with stable codes and observed/required values, and includes canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. The evaluation-semantics version includes the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
+The report is written for both passing and failing evaluations. Report schema version `4` retains the unweighted count-based pass rate for diagnostics and adds weighted totals, the weighted release rate, case quality dimensions, deterministic category/tag slices, and a release-critical gate-failure code. It also records metric evidence plus each effective threshold and precedence source, emits `gate_failures` with stable codes and observed/required values, and includes canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. The evaluation-semantics version includes the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
 
 Comparison report schema version `1` embeds both evaluation reports, the comparison policy, ordered per-case and per-metric deltas, budget-failure evidence, a stable baseline/candidate matrix, and deterministic ablation counts. Canonical hashes bind the suite, baseline outputs, candidate outputs, and comparison policy; `comparison_id` binds those hashes, the serialized normalized variant labels, and evaluator semantics. The comparison gate requires the candidate's release gate and every regression budget to pass. A blocked comparison is still written for diagnosis and exits with status `1`.
 

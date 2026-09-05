@@ -15,6 +15,7 @@ from evalforge.contracts import (
     MetricEvidence,
     MetricName,
     ReleasePolicy,
+    SliceSummary,
     ThresholdSource,
 )
 
@@ -45,6 +46,36 @@ _METRIC_REGISTRY: dict[MetricName, Callable[[str, str], float]] = {
 def registered_metrics() -> tuple[MetricName, ...]:
     """Return deterministic metric names in stable registration order."""
     return tuple(_METRIC_REGISTRY)
+
+
+def _summarize_slices(
+    results: tuple[CaseResult, ...], dimension: Literal["category", "tag"]
+) -> tuple[SliceSummary, ...]:
+    if dimension == "category":
+        names = sorted({result.category for result in results})
+    else:
+        names = sorted({tag for result in results for tag in result.tags})
+
+    summaries: list[SliceSummary] = []
+    for name in names:
+        members = tuple(
+            result
+            for result in results
+            if (result.category == name if dimension == "category" else name in result.tags)
+        )
+        total_weight = sum(result.weight for result in members)
+        passed_weight = sum(result.weight for result in members if result.passed)
+        summaries.append(
+            SliceSummary(
+                name=name,
+                total_cases=len(members),
+                passed_cases=sum(result.passed for result in members),
+                total_weight=total_weight,
+                passed_weight=passed_weight,
+                weighted_pass_rate=passed_weight / total_weight,
+            )
+        )
+    return tuple(summaries)
 
 
 def evaluate_suite(
@@ -113,6 +144,10 @@ def evaluate_suite(
                 metric=case.metric,
                 threshold=threshold,
                 threshold_source=threshold_source,
+                weight=case.weight,
+                severity=case.severity,
+                category=case.category,
+                tags=case.tags,
                 evidence=MetricEvidence(
                     normalization=normalization,
                     normalized_expected=normalized_expected,
@@ -125,24 +160,42 @@ def evaluate_suite(
     results = tuple(results_list)
     passed_cases = sum(result.passed for result in results)
     pass_rate = passed_cases / len(results)
-    release_ready = pass_rate >= effective_minimum_pass_rate
-    gate_failures = (
-        ()
-        if release_ready
-        else (
+    total_weight = sum(result.weight for result in results)
+    passed_weight = sum(result.weight for result in results if result.passed)
+    weighted_pass_rate = passed_weight / total_weight
+    blocking_severities = policy.blocking_severities if policy is not None else ("critical",)
+    has_blocking_failure = any(
+        not result.passed and result.severity in blocking_severities for result in results
+    )
+    gate_failures_list: list[GateFailure] = []
+    if weighted_pass_rate < effective_minimum_pass_rate:
+        gate_failures_list.append(
             GateFailure(
                 code="minimum_pass_rate_not_met",
-                observed=pass_rate,
+                observed=weighted_pass_rate,
                 required=effective_minimum_pass_rate,
-            ),
+            )
         )
-    )
+    if has_blocking_failure:
+        gate_failures_list.append(
+            GateFailure(
+                code="release_critical_case_failed",
+                observed=0.0,
+                required=1.0,
+            )
+        )
+    gate_failures = tuple(gate_failures_list)
     return EvaluationReport(
         total_cases=len(results),
         passed_cases=passed_cases,
         pass_rate=pass_rate,
+        total_weight=total_weight,
+        passed_weight=passed_weight,
+        weighted_pass_rate=weighted_pass_rate,
         minimum_pass_rate=effective_minimum_pass_rate,
-        release_ready=release_ready,
+        release_ready=not gate_failures,
         gate_failures=gate_failures,
+        category_slices=_summarize_slices(results, "category"),
+        tag_slices=_summarize_slices(results, "tag"),
         results=results,
     )
