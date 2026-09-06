@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "allowed_tools": [
+    "catalog.search",
+    "inventory.lookup"
+  ],
+  "expected_calls": [
+    {
+      "tool": "catalog.search",
+      "arguments": {
+        "query": "wireless keyboard"
+      },
+      "result": {
+        "product_ids": [
+          "keyboard-101"
+        ]
+      }
+    },
+    {
+      "tool": "inventory.lookup",
+      "arguments": {
+        "product_id": "keyboard-101"
+      },
+      "result": {
+        "available": true,
+        "units": 12
+      }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "calls": [
+    {
+      "request": {
+        "call_id": "call-001",
+        "tool": "catalog.search",
+        "arguments": {
+          "query": "wireless keyboard"
+        }
+      },
+      "result": {
+        "call_id": "call-001",
+        "result": {
+          "product_ids": [
+            "keyboard-101"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "call_id": "call-002",
+        "tool": "inventory.lookup",
+        "arguments": {
+          "product_id": "keyboard-101"
+        }
+      },
+      "result": {
+        "call_id": "call-002",
+        "result": {
+          "available": true,
+          "units": 12
+        }
+      }
+    }
+  ]
+}

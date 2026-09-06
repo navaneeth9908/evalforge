@@ -20,7 +20,7 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 - [x] Latency and cost budgets
 - [ ] Token budgets
 - [x] Repeated-run stability and variance analysis
-- [ ] Tool-call trace contract and argument validation
+- [x] Tool-call trace contract and argument/result validation
 - [ ] Agent-trajectory ordering and state-transition checks
 - [ ] Retrieval citation, grounding, and attribution metrics
 - [ ] Prompt-injection and policy-adherence suites

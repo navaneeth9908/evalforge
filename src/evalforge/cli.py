@@ -12,12 +12,14 @@ from pydantic import ValidationError
 
 from evalforge.comparison import compare_evaluations
 from evalforge.contracts import (
+    AgentToolTrace,
     CandidateOutput,
     ComparisonPolicy,
     DatasetManifest,
     EvaluationSuite,
     RepeatedObservations,
     StabilityPolicy,
+    ToolTraceExpectation,
 )
 from evalforge.engine import evaluate_suite
 from evalforge.provenance import (
@@ -28,6 +30,7 @@ from evalforge.provenance import (
     deterministic_run_id,
 )
 from evalforge.stability import analyze_stability
+from evalforge.tool_traces import TOOL_TRACE_SEMANTICS_VERSION, evaluate_tool_trace
 
 MAX_JSON_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 64
@@ -129,6 +132,8 @@ def _read_json(path: Path, *, label: str) -> object:
             "comparison_policy": "comparison policy is invalid or ambiguous",
             "observations": "stability observations are invalid or ambiguous",
             "stability_policy": "stability policy is invalid or ambiguous",
+            "tool_trace_expectation": "tool-trace expectation is invalid or ambiguous",
+            "tool_trace": "tool trace is invalid or ambiguous",
         }
         message = messages[label]
         raise typer.BadParameter(message) from exc
@@ -222,6 +227,52 @@ def evaluate_command(
     typer.echo(f"Evaluation report: {report_path}")
     typer.echo(f"Weighted pass rate: {report.weighted_pass_rate:.2%}")
     typer.echo(f"Release gate: {'PASS' if report.release_ready else 'FAIL'}")
+    if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+@app.command("tool-trace")
+def tool_trace_command(
+    expectation_path: Path,
+    trace_path: Path,
+    report_path: Annotated[Path, typer.Option()] = Path("reports/tool-trace.json"),
+) -> None:
+    """Evaluate an agent tool-call trace without copying raw values into evidence."""
+    raw_expectation = _read_json(expectation_path, label="tool_trace_expectation")
+    raw_trace = _read_json(trace_path, label="tool_trace")
+    try:
+        expectation = ToolTraceExpectation.model_validate(raw_expectation)
+        trace = AgentToolTrace.model_validate(raw_trace)
+    except ValidationError as exc:
+        raise typer.BadParameter("tool-trace input is invalid or ambiguous") from exc
+
+    report = evaluate_tool_trace(expectation, trace)
+    expectation_sha256 = canonical_json_sha256(cast(JsonValue, raw_expectation))
+    trace_sha256 = canonical_json_sha256(cast(JsonValue, raw_trace))
+    tool_trace_id = canonical_json_sha256(
+        {
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "expectation_sha256": expectation_sha256,
+            "tool_trace_id_schema_version": 1,
+            "tool_trace_semantics_version": TOOL_TRACE_SEMANTICS_VERSION,
+            "trace_sha256": trace_sha256,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "expectation_sha256": expectation_sha256,
+        "trace_sha256": trace_sha256,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "tool_trace_semantics_version": TOOL_TRACE_SEMANTICS_VERSION,
+        "tool_trace_id": tool_trace_id,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    typer.echo(f"Tool-trace report: {report_path}")
+    typer.echo(f"Exact-call precision: {report.metrics.precision:.2%}")
+    typer.echo(f"Exact-call recall: {report.metrics.recall:.2%}")
+    typer.echo(f"Tool-trace gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)
 

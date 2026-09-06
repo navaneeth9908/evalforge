@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
     BaseModel,
@@ -14,6 +14,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from evalforge.provenance import JsonValue, canonical_json_bytes
 
 NonEmptyText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
@@ -51,6 +53,22 @@ SliceLabel = Annotated[
         pattern=r"^[a-z0-9][a-z0-9._-]*$",
     ),
 ]
+ToolCallIdentifier = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+    ),
+]
+ToolName = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-zA-Z][a-zA-Z0-9._-]*$",
+    ),
+]
 
 MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991
 NonNegativeSafeInteger = Annotated[int, Field(ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True)]
@@ -61,6 +79,205 @@ def _require_json_number(value: object, *, field_name: str) -> object:
     if type(value) not in (int, float):
         raise ValueError(f"{field_name} must be a JSON number")
     return value
+
+
+def _require_canonical_json(value: object) -> object:
+    stack: list[tuple[object, int]] = [(value, 0)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > 100_000 or depth > 64:
+            raise ValueError("tool evidence exceeds structural limits")
+        if item is None or type(item) in (bool, int, float):
+            continue
+        if isinstance(item, str):
+            if len(item) > 65_536:
+                raise ValueError("tool evidence string exceeds length limit")
+            continue
+        if isinstance(item, list):
+            stack.extend((child, depth + 1) for child in item)
+            continue
+        if isinstance(item, dict) and all(isinstance(key, str) for key in item):
+            for key, child in item.items():
+                stack.append((key, depth + 1))
+                stack.append((child, depth + 1))
+            continue
+        raise ValueError("tool evidence must contain only JSON values")
+
+    canonical_json_bytes(cast(JsonValue, value))
+    return value
+
+
+class ToolCallRequest(BaseModel):
+    """Strict request evidence for one AI-agent tool invocation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    call_id: ToolCallIdentifier
+    tool: ToolName
+    arguments: dict[str, object]
+
+    _validate_arguments = field_validator("arguments", mode="before")(_require_canonical_json)
+
+
+class ToolCallResult(BaseModel):
+    """Strict result evidence paired to a tool request by call ID."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    call_id: ToolCallIdentifier
+    result: object
+
+    _validate_result = field_validator("result", mode="before")(_require_canonical_json)
+
+
+class ToolCall(BaseModel):
+    """One complete request/result exchange."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request: ToolCallRequest
+    result: ToolCallResult
+
+    @model_validator(mode="after")
+    def require_matching_call_ids(self) -> Self:
+        if self.request.call_id != self.result.call_id:
+            raise ValueError("tool request and result call IDs must match")
+        return self
+
+
+class AgentToolTrace(BaseModel):
+    """Versioned ordered tool exchanges emitted by one agent run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    calls: tuple[ToolCall, ...] = Field(max_length=10000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("calls")
+    @classmethod
+    def require_unique_call_ids(cls, value: tuple[ToolCall, ...]) -> tuple[ToolCall, ...]:
+        call_ids = [call.request.call_id for call in value]
+        if len(set(call_ids)) != len(call_ids):
+            raise ValueError("tool call IDs must be unique")
+        return value
+
+
+class ExpectedToolCall(BaseModel):
+    """Expected tool name, arguments, and result without a runtime call ID."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tool: ToolName
+    arguments: dict[str, object]
+    result: object
+
+    _validate_arguments = field_validator("arguments", mode="before")(_require_canonical_json)
+    _validate_result = field_validator("result", mode="before")(_require_canonical_json)
+
+
+class ToolTraceExpectation(BaseModel):
+    """Strict expected-call contract and tool allowlist."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    allowed_tools: tuple[ToolName, ...] = Field(min_length=1, max_length=1000)
+    expected_calls: tuple[ExpectedToolCall, ...] = Field(min_length=1, max_length=10000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def require_unique_allowed_tools(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("allowed tools must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def require_expected_tools_to_be_allowed(self) -> Self:
+        if any(call.tool not in self.allowed_tools for call in self.expected_calls):
+            raise ValueError("every expected tool must be allowed")
+        return self
+
+
+class ToolTraceCallEvidence(BaseModel):
+    """Redaction-safe evidence for one observed exchange."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    call_index: int = Field(ge=0, strict=True)
+    call_id: ToolCallIdentifier
+    tool: ToolName
+    expected_index: int | None = Field(default=None, ge=0, strict=True)
+    argument_sha256: Sha256Digest
+    result_sha256: Sha256Digest
+    tool_matched: bool
+    arguments_matched: bool
+    result_matched: bool
+
+
+class ToolTraceMetrics(BaseModel):
+    """Deterministic matching counts and rates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_call_count: int = Field(ge=1, strict=True)
+    actual_call_count: int = Field(ge=0, strict=True)
+    tool_match_count: int = Field(ge=0, strict=True)
+    argument_match_count: int = Field(ge=0, strict=True)
+    result_match_count: int = Field(ge=0, strict=True)
+    complete_match_count: int = Field(ge=0, strict=True)
+    precision: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    recall: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+ToolTraceFindingCode = Literal[
+    "missing_call",
+    "extra_call",
+    "repeated_call",
+    "disallowed_call",
+    "argument_mismatch",
+    "result_mismatch",
+]
+
+
+class ToolTraceFinding(BaseModel):
+    """Redaction-safe reason a tool-trace gate failed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: ToolTraceFindingCode
+    tool: ToolName
+    expected_index: int | None = Field(default=None, ge=0, strict=True)
+    actual_index: int | None = Field(default=None, ge=0, strict=True)
+    expected_sha256: Sha256Digest | None = None
+    actual_sha256: Sha256Digest | None = None
+
+
+class ToolTraceReport(BaseModel):
+    """Versioned deterministic tool-trace verdict."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    metrics: ToolTraceMetrics
+    calls: tuple[ToolTraceCallEvidence, ...]
+    findings: tuple[ToolTraceFinding, ...] = ()
+    release_ready: bool
 
 
 class DatasetLineage(BaseModel):

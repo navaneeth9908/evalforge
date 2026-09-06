@@ -23,6 +23,10 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Integer-safe per-case latency and cost evidence with total, ceiling-average, and nearest-rank percentile budgets
 - Versioned repeated-observation inputs with weighted pass-rate mean, minimum, maximum, and population variance
 - Configurable variance and flaky-case gates with ordered per-run and per-case evidence
+- Strict request/result tool-call traces with paired call IDs and bounded JSON values
+- Allowlist enforcement plus missing, extra, repeated, argument, and result checks
+- Redaction-safe tool evidence using canonical value digests instead of raw arguments/results
+- Deterministic exact-call precision, recall, and component match counts
 - Non-empty and unique case-ID validation
 - Exact candidate-output accounting with no silent omissions or extras
 - Finite minimum pass-rate validation
@@ -61,6 +65,9 @@ uv run evalforge compare examples/suite.json examples/baseline-outputs.json \
 uv run evalforge stability examples/suite.json examples/repeated-observations.json \
   --stability-policy examples/stability-policy.json \
   --report-path reports/stability.json
+
+uv run evalforge tool-trace examples/tool-trace-expectation.json \
+  examples/tool-trace.json --report-path reports/tool-trace.json
 ```
 
 Expected console result:
@@ -77,6 +84,10 @@ Weighted pass-rate mean: 100.00%
 Weighted pass-rate population variance: 0.000000
 Flaky case rate: 0.00%
 Stability gate: PASS
+Tool-trace report: reports/tool-trace.json
+Exact-call precision: 100.00%
+Exact-call recall: 100.00%
+Tool-trace gate: PASS
 ```
 
 Generated reports are intentionally ignored by Git. Review `reports/example.json` locally for the aggregate verdict, ordered case-level evidence, canonical input digests, deterministic run ID, and a minimal dataset summary. Full manifest lineage is validated and content-addressed but is not copied into reports because source locations and creator identities can be sensitive. The `--dataset-manifest` option is optional so existing CLI invocations remain valid; suite and candidate digests and a run ID are always emitted.
@@ -144,6 +155,8 @@ A comparison policy is a separate strict JSON contract with `schema_version: 1`,
 
 Repeated observations use a separate `schema_version: 1` contract containing one to 1,000 uniquely named runs. Each run provides the same exact case-ID-to-output mapping accepted by `evaluate`; missing or extra case IDs in any run fail closed. A stability policy has `schema_version: 1`, `max_weighted_pass_rate_variance`, and `max_flaky_case_rate`. Both limits are finite JSON numbers in `[0, 1]`; booleans, numeric strings, unknown fields, duplicate run IDs, and empty run collections are rejected. See [`examples/repeated-observations.json`](examples/repeated-observations.json) and [`examples/stability-policy.json`](examples/stability-policy.json).
 
+Tool-trace evaluation uses two strict `schema_version: 1` contracts. The expectation declares a unique non-empty `allowed_tools` list and one or more expected tool names, argument objects, and result JSON values. The observed trace contains zero or more complete `request`/`result` exchanges; every exchange requires a unique call ID shared by its request and result. Unknown fields, malformed names and IDs, non-integer versions, non-finite or non-JSON values, duplicate call IDs, duplicate allowlist entries, and expected tools outside the allowlist fail closed. Values are bounded to 64 levels, 100,000 nodes, and 65,536 characters per string. Matching treats calls for each tool as an unordered multiset and uses type-strict canonical JSON identity, leaving global trajectory ordering for the next roadmap capability. Deterministic pairing prioritizes complete argument/result matches, then argument matches, result matches, and stable indices. Reports classify missing, extra, repeated, disallowed, argument-mismatch, and result-mismatch findings; raw expected and observed arguments/results are never copied into report evidence. Canonical SHA-256 digests support comparisons without exposing those values, but operators should still protect reports because hashes of low-entropy secrets may be guessable. See [`examples/tool-trace-expectation.json`](examples/tool-trace-expectation.json) and [`examples/tool-trace.json`](examples/tool-trace.json).
+
 An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
 
 ## Release-gate behavior
@@ -163,6 +176,12 @@ case_flaky = case passed in at least one run and failed in at least one run
 stability_ready = every repeated run passes the suite release gate
                   and population variance <= configured maximum
                   and flaky case rate <= configured maximum
+
+tool_trace_precision = complete_matches / observed_calls
+                       (0 when there are no observed calls)
+tool_trace_recall = complete_matches / expected_calls
+tool_trace_ready = every expected occurrence matches its tool, arguments, and result
+                   and there are no missing, extra, repeated, or disallowed calls
 ```
 
 The report is written for both passing and failing evaluations. Report schema version `5` retains the unweighted count-based pass rate for diagnostics, weighted totals, the weighted release rate, case quality dimensions, deterministic category/tag slices, and machine-readable quality-gate failures. It adds optional per-case performance evidence, deterministic latency/cost aggregates, and ordered `resource_gate_failures` with observed and required integer values. Reports also record metric evidence plus each effective threshold and precedence source, canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. Evaluation semantics version `3` binds resource-gate behavior and the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
@@ -170,6 +189,8 @@ The report is written for both passing and failing evaluations. Report schema ve
 Comparison report schema version `3` embeds schema-version-5 evaluation reports and accepts the same plain or structured candidate-output values as `evaluate`. It uses case weights for its overall pass-rate delta, per-metric means, regression budgets, and baseline/candidate matrix, while each nested evaluation independently enforces configured resource budgets. It also includes ordered per-case deltas, budget-failure evidence, and deterministic ablation counts. Canonical hashes bind the suite, baseline outputs, candidate outputs, and comparison policy; `comparison_id` binds those hashes, the serialized normalized variant labels, canonicalization and evaluator semantics, and comparison-ID schema version `3`. The comparison gate requires the candidate's release gate and every weighted regression budget to pass. A blocked comparison is still written for diagnosis and exits with status `1`.
 
 Stability report schema version `1` preserves input run order, each run's weighted pass rate and suite-gate verdict, aggregate mean/minimum/maximum and population variance, plus suite-ordered per-case pass/fail counts and flaky flags. One run is valid and has zero population variance. Limits are inclusive and failures are ordered as variance then flaky-case rate. The final stability verdict also requires every observed run to pass the suite's existing quality/resource gate. Canonical digests bind the suite, repeated observations, and stability policy; `stability_id` additionally binds canonicalization and evaluator semantics. Identical validated inputs serialize byte-for-byte identically. Invalid observations do not produce a report, a failed gate still produces evidence and exits `1`, and a passing gate exits `0`.
+
+Tool-trace report schema version `1` preserves observed call order and emits tool names, call IDs, expected/actual indices, Boolean component matches, canonical argument/result digests, deterministic counts, precision, recall, and ordered findings. The report also binds the raw validated expectation and trace digests, canonicalization version, tool-matching semantics version, and a deterministic `tool_trace_id`. Identical inputs serialize byte-for-byte identically. A finding writes diagnostic evidence and exits `1`; malformed input writes no report and exits with a usage error.
 
 ## Architecture
 
