@@ -94,7 +94,7 @@ def test_weighted_aggregation_and_critical_failures_control_release() -> None:
     )
 
     assert report.pass_rate == 0.5
-    assert report.schema_version == 4
+    assert report.schema_version == 5
     assert report.total_weight == 10.0
     assert report.passed_weight == 9.0
     assert report.weighted_pass_rate == 0.9
@@ -240,7 +240,7 @@ def test_cli_serializes_versioned_weighted_slice_report(tmp_path: object) -> Non
     assert result.exit_code == 0, result.output
     assert "Weighted pass rate: 75.00%" in result.output
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
     assert report["weighted_pass_rate"] == 0.75
     assert [item["name"] for item in report["category_slices"]] == [
         "quality",

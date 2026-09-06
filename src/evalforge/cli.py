@@ -11,7 +11,12 @@ import typer
 from pydantic import ValidationError
 
 from evalforge.comparison import compare_evaluations
-from evalforge.contracts import ComparisonPolicy, DatasetManifest, EvaluationSuite
+from evalforge.contracts import (
+    CandidateOutput,
+    ComparisonPolicy,
+    DatasetManifest,
+    EvaluationSuite,
+)
 from evalforge.engine import evaluate_suite
 from evalforge.provenance import (
     CANONICALIZATION_VERSION,
@@ -124,6 +129,19 @@ def _read_json(path: Path, *, label: str) -> object:
         raise typer.BadParameter(message) from exc
 
 
+def _parse_candidate_outputs(raw_outputs: object) -> dict[str, str | CandidateOutput]:
+    message = "outputs must be a JSON object mapping case IDs to strings or evidence objects"
+    if not isinstance(raw_outputs, dict) or not all(isinstance(key, str) for key in raw_outputs):
+        raise typer.BadParameter(message)
+    try:
+        return {
+            key: value if isinstance(value, str) else CandidateOutput.model_validate(value)
+            for key, value in raw_outputs.items()
+        }
+    except ValidationError as exc:
+        raise typer.BadParameter(message) from exc
+
+
 @app.callback()
 def main() -> None:
     """Run EvalForge evaluation workflows."""
@@ -144,10 +162,7 @@ def evaluate_command(
         raise typer.BadParameter("suite file is invalid or ambiguous") from exc
 
     raw_outputs = _read_json(outputs_path, label="outputs")
-    if not isinstance(raw_outputs, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) for key, value in raw_outputs.items()
-    ):
-        raise typer.BadParameter("outputs must be a JSON object mapping case IDs to strings")
+    candidate_outputs = _parse_candidate_outputs(raw_outputs)
 
     suite_payload = cast(JsonValue, raw_suite)
     candidate_payload = cast(JsonValue, raw_outputs)
@@ -175,7 +190,7 @@ def evaluate_command(
     try:
         report = evaluate_suite(
             suite.cases,
-            raw_outputs,
+            candidate_outputs,
             policy=suite.resolved_policy,
         )
     except ValueError as exc:
@@ -183,7 +198,7 @@ def evaluate_command(
     payload = {
         "suite_name": suite.name,
         **report.model_dump(mode="json"),
-        "schema_version": 4,
+        "schema_version": 5,
         "suite_sha256": suite_sha256,
         "candidate_sha256": candidate_sha256,
         "dataset_manifest_sha256": manifest_sha256,
@@ -227,13 +242,8 @@ def compare_command(
     except ValidationError as exc:
         raise typer.BadParameter("suite or comparison policy is invalid or ambiguous") from exc
 
-    for outputs in (raw_baseline, raw_candidate):
-        if not isinstance(outputs, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in outputs.items()
-        ):
-            raise typer.BadParameter("outputs must be a JSON object mapping case IDs to strings")
-    baseline_outputs = cast(dict[str, str], raw_baseline)
-    candidate_outputs = cast(dict[str, str], raw_candidate)
+    baseline_outputs = _parse_candidate_outputs(raw_baseline)
+    candidate_outputs = _parse_candidate_outputs(raw_candidate)
 
     try:
         report = compare_evaluations(
@@ -254,7 +264,8 @@ def compare_command(
     comparison_policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
     comparison_id = canonical_json_sha256(
         {
-            "schema_version": 2,
+            "schema_version": 3,
+            "canonicalization_version": CANONICALIZATION_VERSION,
             "suite_sha256": suite_sha256,
             "baseline_sha256": baseline_sha256,
             "candidate_sha256": candidate_sha256,

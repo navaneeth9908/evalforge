@@ -20,6 +20,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Positive finite case weights with weighted aggregate release decisions
 - Low, medium, high, and critical severity labels with critical-failure blocking by default
 - Deterministic weighted category and tag slice summaries
+- Integer-safe per-case latency and cost evidence with total, ceiling-average, and nearest-rank percentile budgets
 - Non-empty and unique case-ID validation
 - Exact candidate-output accounting with no silent omissions or extras
 - Finite minimum pass-rate validation
@@ -100,7 +101,7 @@ An evaluation suite declares its schema version, name, release threshold, and ca
 }
 ```
 
-Candidate outputs are a JSON object keyed by case ID:
+Candidate outputs are a JSON object keyed by case ID. A value may be a plain output string:
 
 ```json
 {
@@ -108,9 +109,23 @@ Candidate outputs are a JSON object keyed by case ID:
 }
 ```
 
+Structured evidence may be provided for observational runs. When `resource_budgets` are configured, every value must provide the output plus non-negative integer-safe latency and cost evidence:
+
+```json
+{
+  "refund-window": {
+    "output": "30 DAYS",
+    "latency_ms": 125,
+    "cost_micro_usd": 300
+  }
+}
+```
+
 `metric` selects `exact` (the default), `contains`, or `regex`. Exact and substring metrics trim surrounding whitespace and perform Unicode-aware case folding. Bounded regular expressions trim surrounding whitespace and use case-insensitive matching without rewriting the pattern source; they are limited to 256 characters and deliberately reject repetition, grouping, alternation, and optional operators. This constrained syntax prevents user-controlled patterns from causing unbounded matching work. Substring expectations must remain non-empty after trimming, and exact and substring metrics do not perform semantic matching. Every suite case must have exactly one candidate output, and unregistered outputs are rejected to prevent accounting drift.
 
 A declarative `release_policy` contains the aggregate `minimum_pass_rate`, a suite-wide `default_case_threshold`, optional `metric_thresholds`, and `blocking_severities` (default: `["critical"]`). An individual case may set `threshold`. The effective score threshold precedence is **case override → metric override → suite default**; each result records both the effective value and `threshold_source`. All thresholds must be finite JSON numbers in the closed interval `[0, 1]`; booleans and numeric strings are rejected. For backward compatibility, a suite may use the legacy top-level `minimum_pass_rate` instead of `release_policy`. Exactly one of those keys must be supplied with a non-null value; supplying both keys, either key as `null`, or neither key is invalid. Legacy cases default to exact matching with a score threshold of `1.0`.
+
+`release_policy.resource_budgets` may set any combination of total latency, ceiling-average latency, nearest-rank latency percentile, total cost, ceiling-average cost, and nearest-rank cost percentile limits. Latency uses integer milliseconds and cost uses integer micro-US dollars; per-case values and each suite aggregate must remain in `[0, 9,007,199,254,740,991]`, with booleans, numeric strings, fractions, negative values, and non-finite values rejected. Aggregate overflow is invalid input and does not produce a report. Percentiles are strict integers from 1 through 100. Limits are inclusive: a gate fails only when observed evidence exceeds its configured maximum. Complete evidence is summarized even when no budgets are configured. If budgets are configured, missing or partial performance evidence fails closed before a report is written.
 
 Each case also has a positive finite numeric `weight` from greater than zero through `1,000,000` (default `1.0`), a `severity` of `low`, `medium` (default), `high`, or `critical`, one lowercase `category` label (default `uncategorized`), and up to 20 unique lowercase `tags` (default `[]`). Category and tag labels are 1–64 characters and may contain letters, digits, dots, underscores, and hyphens. Zero, negative, Boolean, string, out-of-range, and non-finite weights fail validation. Reports preserve these dimensions on each result and emit category and tag summaries sorted by label, with case counts, total and passing weight, and weighted pass rate. A failed case whose severity appears in `blocking_severities` blocks release even when the aggregate threshold passes.
 
@@ -127,11 +142,12 @@ case_passed = metric_score >= effective_case_threshold
 weighted_pass_rate = sum(weight for passed cases) / sum(weight for all cases)
 release_ready = weighted_pass_rate >= minimum_pass_rate
                 and no failed case has a blocking severity
+                and no configured resource budget is exceeded
 ```
 
-The report is written for both passing and failing evaluations. Report schema version `4` retains the unweighted count-based pass rate for diagnostics and adds weighted totals, the weighted release rate, case quality dimensions, deterministic category/tag slices, and a release-critical gate-failure code. It also records metric evidence plus each effective threshold and precedence source, emits `gate_failures` with stable codes and observed/required values, and includes canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. The evaluation-semantics version includes the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
+The report is written for both passing and failing evaluations. Report schema version `5` retains the unweighted count-based pass rate for diagnostics, weighted totals, the weighted release rate, case quality dimensions, deterministic category/tag slices, and machine-readable quality-gate failures. It adds optional per-case performance evidence, deterministic latency/cost aggregates, and ordered `resource_gate_failures` with observed and required integer values. Reports also record metric evidence plus each effective threshold and precedence source, canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. Evaluation semantics version `3` binds resource-gate behavior and the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
 
-Comparison report schema version `2` embeds schema-version-4 evaluation reports and uses case weights for its overall pass-rate delta, per-metric means, regression budgets, and baseline/candidate matrix. It also includes ordered per-case deltas, budget-failure evidence, and deterministic ablation counts. Canonical hashes bind the suite, baseline outputs, candidate outputs, and comparison policy; `comparison_id` binds those hashes, the serialized normalized variant labels, evaluator semantics, and comparison-ID schema version `2`. The comparison gate requires the candidate's release gate and every weighted regression budget to pass. A blocked comparison is still written for diagnosis and exits with status `1`.
+Comparison report schema version `3` embeds schema-version-5 evaluation reports and accepts the same plain or structured candidate-output values as `evaluate`. It uses case weights for its overall pass-rate delta, per-metric means, regression budgets, and baseline/candidate matrix, while each nested evaluation independently enforces configured resource budgets. It also includes ordered per-case deltas, budget-failure evidence, and deterministic ablation counts. Canonical hashes bind the suite, baseline outputs, candidate outputs, and comparison policy; `comparison_id` binds those hashes, the serialized normalized variant labels, canonicalization and evaluator semantics, and comparison-ID schema version `3`. The comparison gate requires the candidate's release gate and every weighted regression budget to pass. A blocked comparison is still written for diagnosis and exits with status `1`.
 
 ## Architecture
 
@@ -142,7 +158,7 @@ suite JSON + baseline/candidate outputs
                  |
            schema validation
                  |
-      deterministic evaluator
+ deterministic evaluator + resource gates
                  |
    case/metric deltas + budgets
                  |

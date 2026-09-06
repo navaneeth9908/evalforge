@@ -5,7 +5,11 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from evalforge.provenance import canonical_json_sha256
+from evalforge.provenance import (
+    CANONICALIZATION_VERSION,
+    EVALUATION_SEMANTICS_VERSION,
+    canonical_json_sha256,
+)
 
 
 def test_compare_command_writes_deterministic_evidence_and_fails_regression_gate(
@@ -66,9 +70,9 @@ def test_compare_command_writes_deterministic_evidence_and_fails_regression_gate
     assert second.exit_code == 1, second.output
     assert report_path.read_bytes() == first_bytes
     report = json.loads(first_bytes)
-    assert report["schema_version"] == 2
-    assert report["baseline"]["schema_version"] == 4
-    assert report["candidate"]["schema_version"] == 4
+    assert report["schema_version"] == 3
+    assert report["baseline"]["schema_version"] == 5
+    assert report["candidate"]["schema_version"] == 5
     assert report["baseline_label"] == "production"
     assert report["candidate_label"] == "change-42"
     assert report["suite_sha256"] == canonical_json_sha256(suite)
@@ -77,6 +81,19 @@ def test_compare_command_writes_deterministic_evidence_and_fails_regression_gate
     assert report["comparison_policy_sha256"] == canonical_json_sha256(policy)
     assert report["comparison_policy"] == policy
     assert len(report["comparison_id"]) == 64
+    assert report["comparison_id"] == canonical_json_sha256(
+        {
+            "schema_version": 3,
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "suite_sha256": report["suite_sha256"],
+            "baseline_sha256": report["baseline_sha256"],
+            "candidate_sha256": report["candidate_sha256"],
+            "comparison_policy_sha256": report["comparison_policy_sha256"],
+            "baseline_label": "production",
+            "candidate_label": "change-42",
+            "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+        }
+    )
     assert report["case_deltas"][1]["status"] == "regression"
     assert report["budget_failures"][0]["scope"] == "overall"
     assert report["baseline"]["results"][1]["actual_output"] == "yes"

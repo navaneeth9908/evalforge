@@ -52,6 +52,10 @@ SliceLabel = Annotated[
     ),
 ]
 
+MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991
+NonNegativeSafeInteger = Annotated[int, Field(ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True)]
+Percentile = Annotated[int, Field(ge=1, le=100, strict=True)]
+
 
 def _require_json_number(value: object, *, field_name: str) -> object:
     if type(value) not in (int, float):
@@ -142,6 +146,58 @@ class EvaluationCase(BaseModel):
         return self
 
 
+class CasePerformance(BaseModel):
+    """Integer-safe latency and cost evidence for one candidate output."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    latency_ms: NonNegativeSafeInteger
+    cost_micro_usd: NonNegativeSafeInteger
+
+
+class CandidateOutput(CasePerformance):
+    """Candidate text paired with required performance evidence."""
+
+    output: OutputText
+
+
+class LatencyPercentileBudget(BaseModel):
+    """Inclusive nearest-rank latency percentile limit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    percentile: Percentile
+    max_latency_ms: NonNegativeSafeInteger
+
+
+class CostPercentileBudget(BaseModel):
+    """Inclusive nearest-rank cost percentile limit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    percentile: Percentile
+    max_cost_micro_usd: NonNegativeSafeInteger
+
+
+class ResourceBudgets(BaseModel):
+    """Inclusive suite limits for deterministic latency and cost aggregates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_total_latency_ms: NonNegativeSafeInteger | None = None
+    max_average_latency_ms: NonNegativeSafeInteger | None = None
+    latency_percentile: LatencyPercentileBudget | None = None
+    max_total_cost_micro_usd: NonNegativeSafeInteger | None = None
+    max_average_cost_micro_usd: NonNegativeSafeInteger | None = None
+    cost_percentile: CostPercentileBudget | None = None
+
+    @model_validator(mode="after")
+    def require_at_least_one_limit(self) -> Self:
+        if not any(value is not None for value in self.__dict__.values()):
+            raise ValueError("resource budgets must configure at least one limit")
+        return self
+
+
 class ReleasePolicy(BaseModel):
     """Declarative aggregate and score thresholds for a release decision."""
 
@@ -151,6 +207,7 @@ class ReleasePolicy(BaseModel):
     default_case_threshold: float = Field(default=1.0, ge=0.0, le=1.0, allow_inf_nan=False)
     metric_thresholds: dict[MetricName, ScoreThreshold] = Field(default_factory=dict, max_length=3)
     blocking_severities: tuple[Severity, ...] = ("critical",)
+    resource_budgets: ResourceBudgets | None = None
 
     @field_validator("minimum_pass_rate", "default_case_threshold", mode="before")
     @classmethod
@@ -253,6 +310,7 @@ class CaseResult(BaseModel):
     evidence: MetricEvidence
     expected_output: str
     actual_output: str
+    performance: CasePerformance | None = None
 
 
 class GateFailure(BaseModel):
@@ -278,12 +336,65 @@ class SliceSummary(BaseModel):
     weighted_pass_rate: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
 
 
+class PercentileLatencyEvidence(BaseModel):
+    """Nearest-rank latency percentile evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    percentile: Percentile
+    observed_latency_ms: NonNegativeSafeInteger
+
+
+class PercentileCostEvidence(BaseModel):
+    """Nearest-rank cost percentile evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    percentile: Percentile
+    observed_cost_micro_usd: NonNegativeSafeInteger
+
+
+class PerformanceSummary(BaseModel):
+    """Integer-only aggregate runtime and cost evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_count: int = Field(ge=1, strict=True)
+    total_latency_ms: NonNegativeSafeInteger
+    average_latency_ms: NonNegativeSafeInteger
+    latency_percentile: PercentileLatencyEvidence | None = None
+    total_cost_micro_usd: NonNegativeSafeInteger
+    average_cost_micro_usd: NonNegativeSafeInteger
+    cost_percentile: PercentileCostEvidence | None = None
+
+
+ResourceGateMetric = Literal[
+    "total_latency_ms",
+    "average_latency_ms",
+    "percentile_latency_ms",
+    "total_cost_micro_usd",
+    "average_cost_micro_usd",
+    "percentile_cost_micro_usd",
+]
+
+
+class ResourceGateFailure(BaseModel):
+    """Machine-readable evidence for one exceeded latency or cost budget."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    metric: ResourceGateMetric
+    observed: NonNegativeSafeInteger
+    required: NonNegativeSafeInteger
+    percentile: Percentile | None = None
+
+
 class EvaluationReport(BaseModel):
     """Aggregate release decision plus ordered case-level evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[4] = 4
+    schema_version: Literal[5] = 5
     total_cases: int = Field(ge=1)
     passed_cases: int = Field(ge=0)
     pass_rate: float = Field(ge=0.0, le=1.0)
@@ -293,6 +404,8 @@ class EvaluationReport(BaseModel):
     minimum_pass_rate: float = Field(ge=0.0, le=1.0)
     release_ready: bool
     gate_failures: tuple[GateFailure, ...] = ()
+    performance: PerformanceSummary | None = None
+    resource_gate_failures: tuple[ResourceGateFailure, ...] = ()
     category_slices: tuple[SliceSummary, ...]
     tag_slices: tuple[SliceSummary, ...]
     results: tuple[CaseResult, ...]
@@ -407,7 +520,7 @@ class ComparisonReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     baseline_label: NonEmptyText
     candidate_label: NonEmptyText
     baseline: EvaluationReport

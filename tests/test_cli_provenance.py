@@ -59,7 +59,7 @@ def test_evaluate_command_records_content_addressed_inputs_and_manifest(tmp_path
 
     assert result.exit_code == 0, result.output
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
     assert report["suite_sha256"] == canonical_json_sha256(suite)
     assert report["candidate_sha256"] == canonical_json_sha256(outputs)
     assert report["dataset_manifest_sha256"] == canonical_json_sha256(manifest)

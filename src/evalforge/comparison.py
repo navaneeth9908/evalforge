@@ -8,6 +8,7 @@ from evalforge.contracts import (
     AblationSummary,
     BudgetReason,
     BudgetScope,
+    CandidateOutput,
     CaseComparison,
     ComparisonPolicy,
     ComparisonReport,
@@ -81,8 +82,8 @@ def _budget_failure(
 
 def compare_evaluations(
     cases: Sequence[EvaluationCase],
-    baseline_outputs: Mapping[str, str],
-    candidate_outputs: Mapping[str, str],
+    baseline_outputs: Mapping[str, str | CandidateOutput],
+    candidate_outputs: Mapping[str, str | CandidateOutput],
     *,
     evaluation_policy: ReleasePolicy,
     comparison_policy: ComparisonPolicy,

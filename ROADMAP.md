@@ -17,7 +17,8 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 ## Evaluation depth
 
 - [x] Weighted cases and severity-aware release decisions
-- [ ] Latency, token, and cost budgets
+- [x] Latency and cost budgets
+- [ ] Token budgets
 - [ ] Repeated-run stability and variance analysis
 - [ ] Tool-call trace contract and argument validation
 - [ ] Agent-trajectory ordering and state-transition checks

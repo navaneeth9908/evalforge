@@ -38,9 +38,9 @@ def test_comparison_reports_case_metric_matrix_and_ablation_deltas() -> None:
         candidate_label="candidate-v2",
     )
 
-    assert report.schema_version == 2
-    assert report.baseline.schema_version == 4
-    assert report.candidate.schema_version == 4
+    assert report.schema_version == 3
+    assert report.baseline.schema_version == 5
+    assert report.candidate.schema_version == 5
     assert [delta.status for delta in report.case_deltas] == [
         "unchanged",
         "regression",
