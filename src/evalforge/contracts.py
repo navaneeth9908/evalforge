@@ -161,6 +161,75 @@ class CandidateOutput(CasePerformance):
     output: OutputText
 
 
+RunIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+    ),
+]
+
+
+class ObservationRun(BaseModel):
+    """One named observation of outputs for every suite case."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_id: RunIdentifier
+    outputs: dict[CaseIdentifier, str | CandidateOutput] = Field(min_length=1, max_length=10000)
+
+
+class RepeatedObservations(BaseModel):
+    """Versioned collection of repeated candidate observations."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    runs: tuple[ObservationRun, ...] = Field(min_length=1, max_length=1000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("runs")
+    @classmethod
+    def require_unique_run_ids(
+        cls, value: tuple[ObservationRun, ...]
+    ) -> tuple[ObservationRun, ...]:
+        if len({run.run_id for run in value}) != len(value):
+            raise ValueError("observation run IDs must be unique")
+        return value
+
+
+class StabilityPolicy(BaseModel):
+    """Versioned limits for repeated-run score variance and flaky outcomes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    max_weighted_pass_rate_variance: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    max_flaky_case_rate: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("max_weighted_pass_rate_variance", "max_flaky_case_rate", mode="before")
+    @classmethod
+    def require_numeric_limits(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+
 class LatencyPercentileBudget(BaseModel):
     """Inclusive nearest-rank latency percentile limit."""
 
@@ -409,6 +478,71 @@ class EvaluationReport(BaseModel):
     category_slices: tuple[SliceSummary, ...]
     tag_slices: tuple[SliceSummary, ...]
     results: tuple[CaseResult, ...]
+
+
+class StabilityScoreSummary(BaseModel):
+    """Deterministic aggregate statistics across repeated weighted pass rates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mean: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    minimum: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    maximum: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    population_variance: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+class CaseStability(BaseModel):
+    """Repeated pass/fail evidence for one suite case."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_id: CaseIdentifier
+    pass_count: int = Field(ge=0, strict=True)
+    fail_count: int = Field(ge=0, strict=True)
+    flaky: bool
+
+
+class RunStability(BaseModel):
+    """Suite-gate outcome for one repeated observation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_id: RunIdentifier
+    weighted_pass_rate: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    release_ready: bool
+
+
+StabilityGateMetric = Literal[
+    "weighted_pass_rate_population_variance",
+    "flaky_case_rate",
+]
+
+
+class StabilityGateFailure(BaseModel):
+    """Evidence for one exceeded repeated-run stability limit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    metric: StabilityGateMetric
+    observed: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    required: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+class StabilityReport(BaseModel):
+    """Versioned repeated-run stability evidence and release decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    run_count: int = Field(ge=1, strict=True)
+    failed_run_count: int = Field(ge=0, strict=True)
+    runs: tuple[RunStability, ...]
+    weighted_pass_rate: StabilityScoreSummary
+    flaky_case_count: int = Field(ge=0, strict=True)
+    flaky_case_rate: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    cases: tuple[CaseStability, ...]
+    gate_failures: tuple[StabilityGateFailure, ...] = ()
+    release_ready: bool
 
 
 ComparisonStatus = Literal["improvement", "unchanged", "regression"]

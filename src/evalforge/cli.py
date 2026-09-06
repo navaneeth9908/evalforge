@@ -16,6 +16,8 @@ from evalforge.contracts import (
     ComparisonPolicy,
     DatasetManifest,
     EvaluationSuite,
+    RepeatedObservations,
+    StabilityPolicy,
 )
 from evalforge.engine import evaluate_suite
 from evalforge.provenance import (
@@ -25,6 +27,7 @@ from evalforge.provenance import (
     canonical_json_sha256,
     deterministic_run_id,
 )
+from evalforge.stability import analyze_stability
 
 MAX_JSON_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 64
@@ -124,6 +127,8 @@ def _read_json(path: Path, *, label: str) -> object:
             "suite": "suite file is invalid or ambiguous",
             "manifest": "dataset manifest is invalid or ambiguous",
             "comparison_policy": "comparison policy is invalid or ambiguous",
+            "observations": "stability observations are invalid or ambiguous",
+            "stability_policy": "stability policy is invalid or ambiguous",
         }
         message = messages[label]
         raise typer.BadParameter(message) from exc
@@ -217,6 +222,72 @@ def evaluate_command(
     typer.echo(f"Evaluation report: {report_path}")
     typer.echo(f"Weighted pass rate: {report.weighted_pass_rate:.2%}")
     typer.echo(f"Release gate: {'PASS' if report.release_ready else 'FAIL'}")
+    if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+@app.command("stability")
+def stability_command(
+    suite_path: Path,
+    observations_path: Path,
+    stability_policy_path: Annotated[Path, typer.Option("--stability-policy")],
+    report_path: Annotated[Path, typer.Option()] = Path("reports/stability.json"),
+) -> None:
+    """Measure repeated-run variance and flaky case outcomes."""
+    raw_suite = _read_json(suite_path, label="suite")
+    raw_observations = _read_json(observations_path, label="observations")
+    raw_policy = _read_json(stability_policy_path, label="stability_policy")
+    try:
+        suite = EvaluationSuite.model_validate(raw_suite)
+        observations = RepeatedObservations.model_validate(raw_observations)
+        stability_policy = StabilityPolicy.model_validate(raw_policy)
+    except ValidationError as exc:
+        raise typer.BadParameter("stability input is invalid or ambiguous") from exc
+
+    try:
+        report = analyze_stability(
+            suite.cases,
+            observations,
+            evaluation_policy=suite.resolved_policy,
+            stability_policy=stability_policy,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter("stability input is invalid or ambiguous") from exc
+
+    suite_sha256 = canonical_json_sha256(cast(JsonValue, raw_suite))
+    observations_sha256 = canonical_json_sha256(cast(JsonValue, raw_observations))
+    stability_policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
+    stability_id = canonical_json_sha256(
+        {
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+            "observations_sha256": observations_sha256,
+            "stability_id_schema_version": 1,
+            "stability_policy_sha256": stability_policy_sha256,
+            "suite_sha256": suite_sha256,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "suite_name": suite.name,
+        "suite_sha256": suite_sha256,
+        "observations_sha256": observations_sha256,
+        "stability_policy_sha256": stability_policy_sha256,
+        "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "stability_id": stability_id,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    typer.echo(f"Stability report: {report_path}")
+    typer.echo(f"Weighted pass-rate mean: {report.weighted_pass_rate.mean:.2%}")
+    typer.echo(
+        "Weighted pass-rate population variance: "
+        f"{report.weighted_pass_rate.population_variance:.6f}"
+    )
+    typer.echo(f"Flaky case rate: {report.flaky_case_rate:.2%}")
+    typer.echo(f"Stability gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)
 

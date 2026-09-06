@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "runs": [
+    {
+      "run_id": "observation-1",
+      "outputs": {
+        "refund-window": "30 days",
+        "account-sharing": "No"
+      }
+    },
+    {
+      "run_id": "observation-2",
+      "outputs": {
+        "refund-window": "30 DAYS",
+        "account-sharing": " no "
+      }
+    }
+  ]
+}
