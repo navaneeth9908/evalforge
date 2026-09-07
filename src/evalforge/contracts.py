@@ -280,6 +280,155 @@ class ToolTraceReport(BaseModel):
     release_ready: bool
 
 
+StateName = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-zA-Z][a-zA-Z0-9._-]*$",
+    ),
+]
+
+
+class StateTransition(BaseModel):
+    """One directed state transition used by a trajectory policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    from_state: StateName
+    to_state: StateName
+
+
+class TrajectoryPolicy(BaseModel):
+    """Versioned ordered transition requirements for one agent trajectory."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    initial_state: StateName
+    terminal_states: tuple[StateName, ...] = Field(min_length=1, max_length=1000)
+    required_transitions: tuple[StateTransition, ...] = Field(min_length=1, max_length=10000)
+    forbidden_transitions: tuple[StateTransition, ...] = Field(default=(), max_length=10000)
+    allow_loops: bool = Field(default=False, strict=True)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_unambiguous_state_rules(self) -> Self:
+        if len(set(self.terminal_states)) != len(self.terminal_states):
+            raise ValueError("terminal states must be unique")
+        required = [
+            (transition.from_state, transition.to_state) for transition in self.required_transitions
+        ]
+        forbidden = [
+            (transition.from_state, transition.to_state)
+            for transition in self.forbidden_transitions
+        ]
+        if len(set(required)) != len(required):
+            raise ValueError("required transitions must be unique")
+        if len(set(forbidden)) != len(forbidden):
+            raise ValueError("forbidden transitions must be unique")
+        if set(required) & set(forbidden):
+            raise ValueError("required and forbidden transitions must not overlap")
+        return self
+
+
+class TrajectoryStep(BaseModel):
+    """One ordered state transition observed during an agent run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_id: ToolCallIdentifier
+    state_before: StateName
+    action: ToolName
+    state_after: StateName
+    terminated: bool = Field(default=False, strict=True)
+
+
+class AgentTrajectory(BaseModel):
+    """Versioned sequence of state transitions emitted by one agent run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    steps: tuple[TrajectoryStep, ...] = Field(min_length=1, max_length=10000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("steps")
+    @classmethod
+    def require_unique_step_ids(
+        cls, value: tuple[TrajectoryStep, ...]
+    ) -> tuple[TrajectoryStep, ...]:
+        if len({step.step_id for step in value}) != len(value):
+            raise ValueError("trajectory step IDs must be unique")
+        return value
+
+
+class TrajectoryMetrics(BaseModel):
+    """Deterministic ordering, termination, and cycle measurements."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_count: int = Field(ge=1, strict=True)
+    ordered_step_count: int = Field(ge=0, strict=True)
+    required_transition_count: int = Field(ge=1, strict=True)
+    observed_required_transition_count: int = Field(ge=0, strict=True)
+    forbidden_transition_count: int = Field(ge=0, strict=True)
+    termination_violation_count: int = Field(ge=0, strict=True)
+    loop_count: int = Field(ge=0, strict=True)
+    sequence_score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    termination_score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+TrajectoryFindingCode = Literal[
+    "initial_state_mismatch",
+    "sequence_mismatch",
+    "missing_transition",
+    "unexpected_transition",
+    "state_discontinuity",
+    "forbidden_transition",
+    "premature_termination",
+    "unterminated",
+    "loop_detected",
+]
+
+
+class TrajectoryFinding(BaseModel):
+    """Explainable state and index evidence for a trajectory-gate failure."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: TrajectoryFindingCode
+    expected_index: int | None = Field(default=None, ge=0, strict=True)
+    actual_index: int | None = Field(default=None, ge=0, strict=True)
+    expected_from_state: StateName | None = None
+    expected_to_state: StateName | None = None
+    actual_from_state: StateName | None = None
+    actual_to_state: StateName | None = None
+
+
+class TrajectoryReport(BaseModel):
+    """Versioned deterministic trajectory-policy verdict."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    metrics: TrajectoryMetrics
+    findings: tuple[TrajectoryFinding, ...] = ()
+    release_ready: bool
+
+
 class DatasetLineage(BaseModel):
     """Human-auditable origin and transformation metadata."""
 

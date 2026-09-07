@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "initial_state": "planning",
+  "terminal_states": [
+    "completed"
+  ],
+  "required_transitions": [
+    {
+      "from_state": "planning",
+      "to_state": "researching"
+    },
+    {
+      "from_state": "researching",
+      "to_state": "completed"
+    }
+  ],
+  "forbidden_transitions": [
+    {
+      "from_state": "planning",
+      "to_state": "completed"
+    }
+  ],
+  "allow_loops": false
+}

@@ -25,6 +25,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Configurable variance and flaky-case gates with ordered per-run and per-case evidence
 - Strict request/result tool-call traces with paired call IDs and bounded JSON values
 - Allowlist enforcement plus missing, extra, repeated, argument, and result checks
+- Ordered agent-trajectory policies with state continuity, termination, and loop checks
+- Explainable trajectory findings and deterministic sequence/termination metrics
 - Redaction-safe tool evidence using canonical value digests instead of raw arguments/results
 - Deterministic exact-call precision, recall, and component match counts
 - Non-empty and unique case-ID validation
@@ -68,6 +70,9 @@ uv run evalforge stability examples/suite.json examples/repeated-observations.js
 
 uv run evalforge tool-trace examples/tool-trace-expectation.json \
   examples/tool-trace.json --report-path reports/tool-trace.json
+
+uv run evalforge trajectory examples/trajectory-policy.json \
+  examples/trajectory.json --report-path reports/trajectory.json
 ```
 
 Expected console result:
@@ -88,6 +93,10 @@ Tool-trace report: reports/tool-trace.json
 Exact-call precision: 100.00%
 Exact-call recall: 100.00%
 Tool-trace gate: PASS
+Trajectory report: reports/trajectory.json
+Sequence score: 100.00%
+Termination score: 100.00%
+Trajectory gate: PASS
 ```
 
 Generated reports are intentionally ignored by Git. Review `reports/example.json` locally for the aggregate verdict, ordered case-level evidence, canonical input digests, deterministic run ID, and a minimal dataset summary. Full manifest lineage is validated and content-addressed but is not copied into reports because source locations and creator identities can be sensitive. The `--dataset-manifest` option is optional so existing CLI invocations remain valid; suite and candidate digests and a run ID are always emitted.
@@ -155,7 +164,9 @@ A comparison policy is a separate strict JSON contract with `schema_version: 1`,
 
 Repeated observations use a separate `schema_version: 1` contract containing one to 1,000 uniquely named runs. Each run provides the same exact case-ID-to-output mapping accepted by `evaluate`; missing or extra case IDs in any run fail closed. A stability policy has `schema_version: 1`, `max_weighted_pass_rate_variance`, and `max_flaky_case_rate`. Both limits are finite JSON numbers in `[0, 1]`; booleans, numeric strings, unknown fields, duplicate run IDs, and empty run collections are rejected. See [`examples/repeated-observations.json`](examples/repeated-observations.json) and [`examples/stability-policy.json`](examples/stability-policy.json).
 
-Tool-trace evaluation uses two strict `schema_version: 1` contracts. The expectation declares a unique non-empty `allowed_tools` list and one or more expected tool names, argument objects, and result JSON values. The observed trace contains zero or more complete `request`/`result` exchanges; every exchange requires a unique call ID shared by its request and result. Unknown fields, malformed names and IDs, non-integer versions, non-finite or non-JSON values, duplicate call IDs, duplicate allowlist entries, and expected tools outside the allowlist fail closed. Values are bounded to 64 levels, 100,000 nodes, and 65,536 characters per string. Matching treats calls for each tool as an unordered multiset and uses type-strict canonical JSON identity, leaving global trajectory ordering for the next roadmap capability. Deterministic pairing prioritizes complete argument/result matches, then argument matches, result matches, and stable indices. Reports classify missing, extra, repeated, disallowed, argument-mismatch, and result-mismatch findings; raw expected and observed arguments/results are never copied into report evidence. Canonical SHA-256 digests support comparisons without exposing those values, but operators should still protect reports because hashes of low-entropy secrets may be guessable. See [`examples/tool-trace-expectation.json`](examples/tool-trace-expectation.json) and [`examples/tool-trace.json`](examples/tool-trace.json).
+Tool-trace evaluation uses two strict `schema_version: 1` contracts. The expectation declares a unique non-empty `allowed_tools` list and one or more expected tool names, argument objects, and result JSON values. The observed trace contains zero or more complete `request`/`result` exchanges; every exchange requires a unique call ID shared by its request and result. Unknown fields, malformed names and IDs, non-integer versions, non-finite or non-JSON values, duplicate call IDs, duplicate allowlist entries, and expected tools outside the allowlist fail closed. Values are bounded to 64 levels, 100,000 nodes, and 65,536 characters per string. Matching treats calls for each tool as an unordered multiset and uses type-strict canonical JSON identity. Deterministic pairing prioritizes complete argument/result matches, then argument matches, result matches, and stable indices. Reports classify missing, extra, repeated, disallowed, argument-mismatch, and result-mismatch findings; raw expected and observed arguments/results are never copied into report evidence. Canonical SHA-256 digests support comparisons without exposing those values, but operators should still protect reports because hashes of low-entropy secrets may be guessable. See [`examples/tool-trace-expectation.json`](examples/tool-trace-expectation.json) and [`examples/tool-trace.json`](examples/tool-trace.json).
+
+Trajectory evaluation uses a strict `schema_version: 1` policy plus an ordered agent trace. Policies declare the initial state, one or more terminal states, the exact required transition sequence, optional forbidden transitions, and whether revisiting a state is allowed. Every trace contains uniquely identified steps with `state_before`, an action label, `state_after`, and an explicit termination signal. EvalForge fails closed on sequence mismatches, missing or unexpected steps, state discontinuities, forbidden transitions, premature or missing termination, and disallowed loops. Reports preserve deterministic counts, sequence and termination scores, and ordered explainable findings without copying action payloads. See [`examples/trajectory-policy.json`](examples/trajectory-policy.json) and [`examples/trajectory.json`](examples/trajectory.json).
 
 An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
 
@@ -191,6 +202,8 @@ Comparison report schema version `3` embeds schema-version-5 evaluation reports 
 Stability report schema version `1` preserves input run order, each run's weighted pass rate and suite-gate verdict, aggregate mean/minimum/maximum and population variance, plus suite-ordered per-case pass/fail counts and flaky flags. One run is valid and has zero population variance. Limits are inclusive and failures are ordered as variance then flaky-case rate. The final stability verdict also requires every observed run to pass the suite's existing quality/resource gate. Canonical digests bind the suite, repeated observations, and stability policy; `stability_id` additionally binds canonicalization and evaluator semantics. Identical validated inputs serialize byte-for-byte identically. Invalid observations do not produce a report, a failed gate still produces evidence and exits `1`, and a passing gate exits `0`.
 
 Tool-trace report schema version `1` preserves observed call order and emits tool names, call IDs, expected/actual indices, Boolean component matches, canonical argument/result digests, deterministic counts, precision, recall, and ordered findings. The report also binds the raw validated expectation and trace digests, canonicalization version, tool-matching semantics version, and a deterministic `tool_trace_id`. Identical inputs serialize byte-for-byte identically. A finding writes diagnostic evidence and exits `1`; malformed input writes no report and exits with a usage error.
+
+Trajectory report schema version `1` emits deterministic transition and violation counts, sequence and termination scores, ordered findings, and a release verdict. The CLI binds canonical policy and trajectory hashes, canonicalization and trajectory-semantics versions, and a deterministic `trajectory_id`. A finding writes diagnostic evidence and exits `1`; a valid trajectory exits `0`; malformed input writes no report and exits with a usage error.
 
 ## Architecture
 

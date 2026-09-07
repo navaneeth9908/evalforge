@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "steps": [
+    {
+      "step_id": "step-1",
+      "state_before": "planning",
+      "action": "search_sources",
+      "state_after": "researching",
+      "terminated": false
+    },
+    {
+      "step_id": "step-2",
+      "state_before": "researching",
+      "action": "compose_answer",
+      "state_after": "completed",
+      "terminated": true
+    }
+  ]
+}

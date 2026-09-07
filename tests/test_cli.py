@@ -390,3 +390,67 @@ def test_evaluate_command_rejects_invalid_utf8_without_a_traceback(
     assert expected_message in result.output
     assert "Traceback" not in result.output
     assert not report_path.exists()
+
+
+def test_trajectory_command_writes_deterministic_release_report(tmp_path: Path) -> None:
+    from evalforge.cli import app
+
+    policy_path = tmp_path / "trajectory-policy.json"
+    trajectory_path = tmp_path / "trajectory.json"
+    report_path = tmp_path / "trajectory-report.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "initial_state": "planning",
+                "terminal_states": ["completed"],
+                "required_transitions": [
+                    {"from_state": "planning", "to_state": "researching"},
+                    {"from_state": "researching", "to_state": "completed"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    trajectory_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "steps": [
+                    {
+                        "step_id": "step-1",
+                        "state_before": "planning",
+                        "action": "search",
+                        "state_after": "researching",
+                    },
+                    {
+                        "step_id": "step-2",
+                        "state_before": "researching",
+                        "action": "answer",
+                        "state_after": "completed",
+                        "terminated": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "trajectory",
+            str(policy_path),
+            str(trajectory_path),
+            "--report-path",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Trajectory gate: PASS" in result.output
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["release_ready"] is True
+    assert report["metrics"]["sequence_score"] == 1.0
+    assert report["metrics"]["termination_score"] == 1.0
+    assert len(report["trajectory_id"]) == 64

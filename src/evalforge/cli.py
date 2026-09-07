@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from evalforge.comparison import compare_evaluations
 from evalforge.contracts import (
     AgentToolTrace,
+    AgentTrajectory,
     CandidateOutput,
     ComparisonPolicy,
     DatasetManifest,
@@ -20,6 +21,7 @@ from evalforge.contracts import (
     RepeatedObservations,
     StabilityPolicy,
     ToolTraceExpectation,
+    TrajectoryPolicy,
 )
 from evalforge.engine import evaluate_suite
 from evalforge.provenance import (
@@ -31,6 +33,7 @@ from evalforge.provenance import (
 )
 from evalforge.stability import analyze_stability
 from evalforge.tool_traces import TOOL_TRACE_SEMANTICS_VERSION, evaluate_tool_trace
+from evalforge.trajectories import TRAJECTORY_SEMANTICS_VERSION, evaluate_trajectory
 
 MAX_JSON_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 64
@@ -134,6 +137,8 @@ def _read_json(path: Path, *, label: str) -> object:
             "stability_policy": "stability policy is invalid or ambiguous",
             "tool_trace_expectation": "tool-trace expectation is invalid or ambiguous",
             "tool_trace": "tool trace is invalid or ambiguous",
+            "trajectory_policy": "trajectory policy is invalid or ambiguous",
+            "trajectory": "trajectory is invalid or ambiguous",
         }
         message = messages[label]
         raise typer.BadParameter(message) from exc
@@ -273,6 +278,52 @@ def tool_trace_command(
     typer.echo(f"Exact-call precision: {report.metrics.precision:.2%}")
     typer.echo(f"Exact-call recall: {report.metrics.recall:.2%}")
     typer.echo(f"Tool-trace gate: {'PASS' if report.release_ready else 'FAIL'}")
+    if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+@app.command("trajectory")
+def trajectory_command(
+    policy_path: Path,
+    trajectory_path: Path,
+    report_path: Annotated[Path, typer.Option()] = Path("reports/trajectory.json"),
+) -> None:
+    """Evaluate ordered agent state transitions and termination behavior."""
+    raw_policy = _read_json(policy_path, label="trajectory_policy")
+    raw_trajectory = _read_json(trajectory_path, label="trajectory")
+    try:
+        policy = TrajectoryPolicy.model_validate(raw_policy)
+        trajectory = AgentTrajectory.model_validate(raw_trajectory)
+    except ValidationError as exc:
+        raise typer.BadParameter("trajectory input is invalid or ambiguous") from exc
+
+    report = evaluate_trajectory(policy, trajectory)
+    policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
+    trajectory_sha256 = canonical_json_sha256(cast(JsonValue, raw_trajectory))
+    trajectory_id = canonical_json_sha256(
+        {
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "policy_sha256": policy_sha256,
+            "trajectory_id_schema_version": 1,
+            "trajectory_semantics_version": TRAJECTORY_SEMANTICS_VERSION,
+            "trajectory_sha256": trajectory_sha256,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "policy_sha256": policy_sha256,
+        "trajectory_sha256": trajectory_sha256,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "trajectory_semantics_version": TRAJECTORY_SEMANTICS_VERSION,
+        "trajectory_id": trajectory_id,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    typer.echo(f"Trajectory report: {report_path}")
+    typer.echo(f"Sequence score: {report.metrics.sequence_score:.2%}")
+    typer.echo(f"Termination score: {report.metrics.termination_score:.2%}")
+    typer.echo(f"Trajectory gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)
 
