@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "answer": "Atlas lasts 18 hours and charges over USB-C.",
+  "claims": [
+    {
+      "claim_id": "battery-life",
+      "text": "Atlas lasts 18 hours",
+      "answer_start": 0,
+      "answer_end": 20
+    },
+    {
+      "claim_id": "charging-port",
+      "text": "and charges over USB-C.",
+      "answer_start": 21,
+      "answer_end": 44
+    }
+  ],
+  "retrieved_documents": [
+    {
+      "document_id": "atlas-spec",
+      "content": "The Atlas battery lasts 18 hours and charges over USB-C."
+    },
+    {
+      "document_id": "atlas-warranty",
+      "content": "Atlas includes a two-year limited warranty."
+    }
+  ],
+  "citations": [
+    {
+      "claim_id": "battery-life",
+      "document_id": "atlas-spec"
+    },
+    {
+      "claim_id": "charging-port",
+      "document_id": "atlas-spec"
+    }
+  ]
+}

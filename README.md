@@ -27,6 +27,9 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Allowlist enforcement plus missing, extra, repeated, argument, and result checks
 - Ordered agent-trajectory policies with state continuity, termination, and loop checks
 - Explainable trajectory findings and deterministic sequence/termination metrics
+- Strict, versioned retrieved-document, answer-claim, and citation contracts
+- Citation validity, precision/recall, context utilization, and lexical grounding metrics
+- Content-redacted RAG evidence that retains document and claim IDs only
 - Redaction-safe tool evidence using canonical value digests instead of raw arguments/results
 - Deterministic exact-call precision, recall, and component match counts
 - Non-empty and unique case-ID validation
@@ -45,7 +48,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The broader platform roadmap—including multi-candidate matrices, agent traces, RAG and safety metrics, model judges, OpenTelemetry, APIs, dashboards, and CI reports—is tracked in [ROADMAP.md](ROADMAP.md). Planned features are not presented as implemented.
+The broader platform roadmap—including safety metrics, model judges, OpenTelemetry, APIs, dashboards, and CI reports—is tracked in [ROADMAP.md](ROADMAP.md). Planned features are not presented as implemented.
 
 ## Quick start
 
@@ -73,6 +76,9 @@ uv run evalforge tool-trace examples/tool-trace-expectation.json \
 
 uv run evalforge trajectory examples/trajectory-policy.json \
   examples/trajectory.json --report-path reports/trajectory.json
+
+uv run evalforge grounding examples/grounding.json \
+  --report-path reports/grounding.json
 ```
 
 Expected console result:
@@ -97,6 +103,13 @@ Trajectory report: reports/trajectory.json
 Sequence score: 100.00%
 Termination score: 100.00%
 Trajectory gate: PASS
+Grounding report: reports/grounding.json
+Citation validity: 100.00%
+Citation precision: 100.00%
+Citation recall: 100.00%
+Context utilization: 50.00%
+Lexical grounding: 100.00%
+Grounding gate: PASS
 ```
 
 Generated reports are intentionally ignored by Git. Review `reports/example.json` locally for the aggregate verdict, ordered case-level evidence, canonical input digests, deterministic run ID, and a minimal dataset summary. Full manifest lineage is validated and content-addressed but is not copied into reports because source locations and creator identities can be sensitive. The `--dataset-manifest` option is optional so existing CLI invocations remain valid; suite and candidate digests and a run ID are always emitted.
@@ -168,6 +181,10 @@ Tool-trace evaluation uses two strict `schema_version: 1` contracts. The expecta
 
 Trajectory evaluation uses a strict `schema_version: 1` policy plus an ordered agent trace. Policies declare the initial state, one or more terminal states, the exact required transition sequence, optional forbidden transitions, and whether revisiting a state is allowed. Every trace contains uniquely identified steps with `state_before`, an action label, `state_after`, and an explicit termination signal. EvalForge fails closed on sequence mismatches, missing or unexpected steps, state discontinuities, forbidden transitions, premature or missing termination, and disallowed loops. Reports preserve deterministic counts, sequence and termination scores, and ordered explainable findings without copying action payloads. See [`examples/trajectory-policy.json`](examples/trajectory-policy.json) and [`examples/trajectory.json`](examples/trajectory.json).
 
+RAG grounding evaluation uses one strict `schema_version: 1` contract containing an answer, uniquely identified answer claims, uniquely identified retrieved documents, and unique claim-to-document citations. Every claim includes an exact half-open `answer_start`/`answer_end` span; spans must be ordered, non-overlapping, match the claim text, and cover every answer character except ASCII space, tab, carriage return, and line feed. This prevents detached claim text from inflating citation recall while leaving answer content unassessed. Citation validity measures references to known claims and documents. Citation precision is the fraction of citations whose claim tokens are all present in the cited document; citation recall is the fraction of claims with at least one such citation. Context utilization is the fraction of retrieved documents used by a valid citation. Lexical grounding is the fraction of unique case-folded answer tokens present anywhere in the retrieved context. Reports expose document and claim IDs, Boolean citation evidence, metrics, and findings, but never copy answers, claims, document content, or answer spans. See [`examples/grounding.json`](examples/grounding.json).
+
+These grounding metrics are deliberately lexical and deterministic, not semantic entailment or factuality judgments. Tokenization uses Unicode-aware case-folded word matching, ignores order and frequency, and can miss synonyms, paraphrases, negation, numerical equivalence, and contradictory passages that share vocabulary. A citation is considered supported only by complete claim-token containment; context utilization records valid references rather than relevance. Required spans make the claim set complete, but caller-selected claim granularity still affects citation recall, so compare recall only under the same versioned claim-generation policy. The report's canonical input digest binds the hidden source text, so reports containing low-entropy inputs should still be protected against offline guessing. Use these measurements as reproducible offline signals alongside domain review or a separately governed semantic judge, not as proof that an answer is true.
+
 An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
 
 ## Release-gate behavior
@@ -193,6 +210,14 @@ tool_trace_precision = complete_matches / observed_calls
 tool_trace_recall = complete_matches / expected_calls
 tool_trace_ready = every expected occurrence matches its tool, arguments, and result
                    and there are no missing, extra, repeated, or disallowed calls
+
+citation_validity = valid_claim_and_document_references / citations
+citation_precision = lexically_supported_citations / citations
+citation_recall = claims_with_a_supported_citation / claims
+context_utilization = documents_used_by_valid_citations / retrieved_documents
+lexical_grounding = unique_answer_tokens_found_in_context / unique_answer_tokens
+grounding_ready = citation_validity == citation_precision == citation_recall == 1
+                  and lexical_grounding == 1
 ```
 
 The report is written for both passing and failing evaluations. Report schema version `5` retains the unweighted count-based pass rate for diagnostics, weighted totals, the weighted release rate, case quality dimensions, deterministic category/tag slices, and machine-readable quality-gate failures. It adds optional per-case performance evidence, deterministic latency/cost aggregates, and ordered `resource_gate_failures` with observed and required integer values. Reports also record metric evidence plus each effective threshold and precedence source, canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. Evaluation semantics version `3` binds resource-gate behavior and the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
@@ -204,6 +229,8 @@ Stability report schema version `1` preserves input run order, each run's weight
 Tool-trace report schema version `1` preserves observed call order and emits tool names, call IDs, expected/actual indices, Boolean component matches, canonical argument/result digests, deterministic counts, precision, recall, and ordered findings. The report also binds the raw validated expectation and trace digests, canonicalization version, tool-matching semantics version, and a deterministic `tool_trace_id`. Identical inputs serialize byte-for-byte identically. A finding writes diagnostic evidence and exits `1`; malformed input writes no report and exits with a usage error.
 
 Trajectory report schema version `1` emits deterministic transition and violation counts, sequence and termination scores, ordered findings, and a release verdict. The CLI binds canonical policy and trajectory hashes, canonicalization and trajectory-semantics versions, and a deterministic `trajectory_id`. A finding writes diagnostic evidence and exits `1`; a valid trajectory exits `0`; malformed input writes no report and exits with a usage error.
+
+Grounding report schema version `1` emits document-ID-only retrieval evidence, claim/document citation IDs, Boolean validity/support evidence, deterministic metrics, and ordered invalid-reference, unsupported-citation, and uncited-claim findings. The CLI binds a canonical input digest, canonicalization and grounding-semantics versions (including the runtime Unicode database used for lexical tokenization), and a deterministic `grounding_id`; raw answer, claim, document text, and answer spans are excluded. Identical inputs under the same reported grounding-semantics version serialize byte-for-byte identically. Malformed inputs write no report, a failed gate writes evidence and exits `1`, and a passing gate exits `0`.
 
 ## Architecture
 

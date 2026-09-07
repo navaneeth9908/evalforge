@@ -18,12 +18,14 @@ from evalforge.contracts import (
     ComparisonPolicy,
     DatasetManifest,
     EvaluationSuite,
+    GroundingEvaluation,
     RepeatedObservations,
     StabilityPolicy,
     ToolTraceExpectation,
     TrajectoryPolicy,
 )
 from evalforge.engine import evaluate_suite
+from evalforge.grounding import GROUNDING_SEMANTICS_VERSION, evaluate_grounding
 from evalforge.provenance import (
     CANONICALIZATION_VERSION,
     EVALUATION_SEMANTICS_VERSION,
@@ -139,6 +141,7 @@ def _read_json(path: Path, *, label: str) -> object:
             "tool_trace": "tool trace is invalid or ambiguous",
             "trajectory_policy": "trajectory policy is invalid or ambiguous",
             "trajectory": "trajectory is invalid or ambiguous",
+            "grounding": "grounding input is invalid or ambiguous",
         }
         message = messages[label]
         raise typer.BadParameter(message) from exc
@@ -324,6 +327,49 @@ def trajectory_command(
     typer.echo(f"Sequence score: {report.metrics.sequence_score:.2%}")
     typer.echo(f"Termination score: {report.metrics.termination_score:.2%}")
     typer.echo(f"Trajectory gate: {'PASS' if report.release_ready else 'FAIL'}")
+    if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+@app.command("grounding")
+def grounding_command(
+    evaluation_path: Path,
+    report_path: Annotated[Path, typer.Option()] = Path("reports/grounding.json"),
+) -> None:
+    """Evaluate deterministic citation and lexical grounding without leaking content."""
+    raw_evaluation = _read_json(evaluation_path, label="grounding")
+    try:
+        evaluation = GroundingEvaluation.model_validate(raw_evaluation)
+    except ValidationError as exc:
+        raise typer.BadParameter("grounding input is invalid or ambiguous") from exc
+
+    report = evaluate_grounding(evaluation)
+    evaluation_sha256 = canonical_json_sha256(cast(JsonValue, raw_evaluation))
+    grounding_id = canonical_json_sha256(
+        {
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "evaluation_sha256": evaluation_sha256,
+            "grounding_id_schema_version": 1,
+            "grounding_semantics_version": GROUNDING_SEMANTICS_VERSION,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "evaluation_sha256": evaluation_sha256,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "grounding_semantics_version": GROUNDING_SEMANTICS_VERSION,
+        "grounding_id": grounding_id,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    typer.echo(f"Grounding report: {report_path}")
+    typer.echo(f"Citation validity: {report.metrics.citation_validity:.2%}")
+    typer.echo(f"Citation precision: {report.metrics.citation_precision:.2%}")
+    typer.echo(f"Citation recall: {report.metrics.citation_recall:.2%}")
+    typer.echo(f"Context utilization: {report.metrics.context_utilization:.2%}")
+    typer.echo(f"Lexical grounding: {report.metrics.lexical_grounding:.2%}")
+    typer.echo(f"Grounding gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)
 

@@ -429,6 +429,179 @@ class TrajectoryReport(BaseModel):
     release_ready: bool
 
 
+GroundingIdentifier = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+    ),
+]
+GroundingText = Annotated[str, StringConstraints(min_length=1, max_length=65536)]
+_GROUNDING_SPAN_GAP_CODEPOINTS = frozenset((9, 10, 13, 32))
+
+
+class RetrievedDocument(BaseModel):
+    """One retrieved document whose content is evaluated but not copied to evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_id: GroundingIdentifier
+    content: GroundingText
+
+
+class GroundingClaim(BaseModel):
+    """One answer claim bound to an exact source span in the answer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    claim_id: GroundingIdentifier
+    text: GroundingText
+    answer_start: int = Field(ge=0, strict=True)
+    answer_end: int = Field(gt=0, le=65536, strict=True)
+
+    @model_validator(mode="after")
+    def require_non_empty_answer_span(self) -> Self:
+        if self.answer_start >= self.answer_end:
+            raise ValueError("claim answer span must be non-empty")
+        return self
+
+
+class Citation(BaseModel):
+    """A claimed relationship between an answer claim and a retrieved document."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    claim_id: GroundingIdentifier
+    document_id: GroundingIdentifier
+
+
+class GroundingEvaluation(BaseModel):
+    """Versioned retrieved-context, answer-claim, and citation evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    answer: GroundingText
+    claims: tuple[GroundingClaim, ...] = Field(min_length=1, max_length=10000)
+    retrieved_documents: tuple[RetrievedDocument, ...] = Field(min_length=1, max_length=10000)
+    citations: tuple[Citation, ...] = Field(default=(), max_length=10000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_complete_unique_evidence(self) -> Self:
+        if len({claim.claim_id for claim in self.claims}) != len(self.claims):
+            raise ValueError("grounding claim IDs must be unique")
+        if len({document.document_id for document in self.retrieved_documents}) != len(
+            self.retrieved_documents
+        ):
+            raise ValueError("retrieved document IDs must be unique")
+        citation_keys = [(citation.claim_id, citation.document_id) for citation in self.citations]
+        if len(set(citation_keys)) != len(citation_keys):
+            raise ValueError("citations must be unique")
+
+        previous_end = 0
+        for claim in self.claims:
+            if claim.answer_start < previous_end:
+                raise ValueError("claim spans must be ordered and non-overlapping")
+            if claim.answer_end > len(self.answer) or (
+                self.answer[claim.answer_start : claim.answer_end] != claim.text
+            ):
+                raise ValueError("claim text must match its answer span")
+            previous_end = claim.answer_end
+
+        coverage_cursor = 0
+        for claim in self.claims:
+            gap = self.answer[coverage_cursor : claim.answer_start]
+            if any(ord(character) not in _GROUNDING_SPAN_GAP_CODEPOINTS for character in gap):
+                raise ValueError("claims must cover the complete answer")
+            coverage_cursor = claim.answer_end
+        if any(
+            ord(character) not in _GROUNDING_SPAN_GAP_CODEPOINTS
+            for character in self.answer[coverage_cursor:]
+        ):
+            raise ValueError("claims must cover the complete answer")
+        return self
+
+
+class GroundingDocumentEvidence(BaseModel):
+    """Document-ID-only retrieval evidence without hidden content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_id: GroundingIdentifier
+    cited: bool
+    utilized: bool
+
+
+class CitationEvidence(BaseModel):
+    """Content-free citation evidence identified only by claim and document IDs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    claim_id: GroundingIdentifier
+    document_id: GroundingIdentifier
+    valid: bool
+    lexical_support: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    supported: bool
+
+
+class GroundingMetrics(BaseModel):
+    """Deterministic citation, utilization, and lexical-overlap measurements."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    claim_count: int = Field(ge=1, strict=True)
+    retrieved_document_count: int = Field(ge=1, strict=True)
+    citation_count: int = Field(ge=0, strict=True)
+    valid_citation_count: int = Field(ge=0, strict=True)
+    supported_citation_count: int = Field(ge=0, strict=True)
+    supported_claim_count: int = Field(ge=0, strict=True)
+    utilized_document_count: int = Field(ge=0, strict=True)
+    citation_validity: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    citation_precision: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    citation_recall: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    context_utilization: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    lexical_grounding: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+GroundingFindingCode = Literal[
+    "invalid_claim_reference",
+    "invalid_document_reference",
+    "unsupported_citation",
+    "uncited_claim",
+]
+
+
+class GroundingFinding(BaseModel):
+    """Content-free reason a deterministic grounding check failed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: GroundingFindingCode
+    claim_id: GroundingIdentifier | None = None
+    document_id: GroundingIdentifier | None = None
+
+
+class GroundingReport(BaseModel):
+    """Versioned deterministic RAG-grounding verdict without retrieved content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    metrics: GroundingMetrics
+    documents: tuple[GroundingDocumentEvidence, ...]
+    citations: tuple[CitationEvidence, ...]
+    findings: tuple[GroundingFinding, ...] = ()
+    release_ready: bool
+
+
 class DatasetLineage(BaseModel):
     """Human-auditable origin and transformation metadata."""
 
