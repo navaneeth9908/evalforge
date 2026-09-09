@@ -17,12 +17,17 @@ flowchart LR
     K[Observed request/result trace JSON] --> V
     TP[Trajectory policy JSON] --> V
     AT[Ordered agent trajectory JSON] --> V
+    SD[Sensitive-data policy JSON] --> V
+    ER[Evaluation reports] --> V
     V --> H[Canonical SHA-256 fingerprints]
     H --> E[Deterministic evaluation engine]
     H --> L[Per-tool multiset matcher]
     H --> TE[Ordered trajectory evaluator]
     TE --> TF[State, termination, and loop findings]
     TF --> X[Process exit status]
+    H --> LS[Deterministic PII and secret scanner]
+    LS --> LF[Value-redacted findings and severity gate]
+    LF --> X
     L --> F[Redaction-safe call evidence and findings]
     F --> X[Process exit status]
     E --> R[Case-level evidence]
@@ -50,6 +55,8 @@ The stability engine evaluates one to 1,000 uniquely named observations against 
 The tool-trace engine validates strict versioned request/result exchanges, matching call IDs, unique observed call IDs, a unique allowlist, and expected calls restricted to that allowlist. It treats each tool's calls as an unordered multiset while retaining observed order in report evidence. Pairing deterministically prioritizes complete canonical argument/result matches, then argument matches, result matches, and stable indices. Comparisons use type-strict canonical JSON identity and report missing, extra, repeated, disallowed, argument-mismatch, and result-mismatch findings. Evidence contains canonical SHA-256 digests rather than raw arguments or results; these digests support integrity checks but are not a confidentiality mechanism for low-entropy values. Deterministic precision, recall, component match counts, and a semantics-bound trace ID support release gating.
 
 The trajectory engine evaluates a strict versioned policy against an ordered sequence of state transitions. It requires an exact positional transition sequence, verifies initial-state and cross-step continuity, blocks explicitly forbidden transitions, and checks that termination occurs only on the final step in an allowed terminal state. Revisiting a state is counted deterministically and either reported as a loop finding or allowed by policy. Findings retain rule and step indices plus state names, but omit action payloads. Canonical policy and trace digests plus an explicit semantics version bind the CLI's deterministic trajectory ID.
+
+The sensitive-data engine applies fixed, bounded detectors to candidate output text or recursively to string values in evaluation reports. It recognizes common email, North American phone, structurally valid US SSN, Luhn-valid payment-card, labeled or common-prefixed API-key, and PEM private-key patterns. Policies select categories, override severities, choose blocking severities, and suppress exact known false positives with SHA-256 digests. Findings retain only a string index, category, and severity; matched text, caller IDs, keys, and source content are excluded. Canonical input and policy digests plus a Unicode-bound semantics version provide deterministic scan identity but are not confidentiality controls for low-entropy values.
 
 The CLI bounds each untrusted JSON file to 1 MiB, 64 nesting levels, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. It rejects duplicate keys, non-finite constants, coercive threshold or resource-evidence types, ambiguous legacy/declarative policies, invalid comparison budgets, and invalid Unicode before evaluation. Canonicalization operates on successfully validated raw JSON values before typed-model normalization, using sorted keys, compact separators, UTF-8 encoding, non-finite-number rejection, and negative-zero normalization before computing SHA-256 digests. Every schema-version-5 evaluation report records suite and candidate digests, canonicalization and evaluator-semantics versions, a run ID bound to that complete preimage, effective thresholds and sources, weighted slice summaries, deterministic resource evidence, and machine-readable gate failures. Schema-version-3 comparison reports include two full schema-version-5 evaluations, the policy and its digest, all input digests, weighted regression evidence, deterministic deltas, matrix and ablation evidence, and a content-addressed comparison ID whose preimage is versioned at `3` and binds canonicalization semantics. Evaluator-semantics version `3` binds resource-gate behavior and includes the runtime Unicode database version used by trimming and case folding. An optional strict, versioned dataset manifest records source lineage and binds it to the suite digest; mismatches fail closed before evaluation. Reports retain only its digest and a minimal dataset ID, version, and license summary so private source locations and creator identities are not propagated.
 
@@ -86,10 +93,10 @@ flowchart TB
 ## Design boundaries
 
 - **Deterministic by default:** core tests and examples make no network calls.
-- **Fail closed:** empty or duplicate repeated observations, malformed or duplicate tool-call IDs, disallowed or unmatched calls, invalid or discontinuous trajectory steps, forbidden transitions, premature or missing termination, disallowed loops, missing or partial resource evidence, aggregate resource overflow, ambiguous policies, unsafe regular expressions, invalid thresholds or measurements, and mismatched case IDs stop evaluation.
+- **Fail closed:** empty candidate-output scans, duplicate or malformed policy controls, blocking sensitive-data findings, empty or duplicate repeated observations, malformed or duplicate tool-call IDs, disallowed or unmatched calls, invalid or discontinuous trajectory steps, forbidden transitions, premature or missing termination, disallowed loops, missing or partial resource evidence, aggregate resource overflow, ambiguous policies, unsafe regular expressions, invalid thresholds or measurements, and mismatched case IDs stop evaluation.
 - **Evidence before verdict:** aggregate decisions retain ordered case-level results; tool-trace reports retain ordered call metadata and value digests without copying raw arguments or results; trajectory reports retain ordered rule/step findings without action payloads.
 - **Provider isolation:** future model adapters remain outside the metric and policy core.
-- **No secret persistence:** credentials are supplied at runtime and never written to reports.
+- **No secret persistence:** credentials are supplied at runtime and never written to reports; sensitive-data findings omit matched values and use digest-only allowlists.
 - **Reproducibility:** canonical suite, baseline, candidate, policy, and optional manifest hashes plus explicit algorithm and evaluator-semantics versions identify every run or comparison; manifests retain source lineage without requiring provider access.
 
 See [ROADMAP.md](../ROADMAP.md) for implementation status.

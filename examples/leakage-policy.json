@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "enabled_categories": [
+    "email_address",
+    "phone_number",
+    "us_ssn",
+    "credit_card",
+    "api_key",
+    "private_key"
+  ],
+  "allowlisted_value_sha256": [
+    "9dc98d058b1d6f4688703fdded7387b1851cddf5e946b37e324c029fc811905f"
+  ],
+  "severity_overrides": {
+    "email_address": "high"
+  },
+  "blocking_severities": [
+    "high",
+    "critical"
+  ]
+}

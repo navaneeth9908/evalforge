@@ -20,12 +20,18 @@ from evalforge.contracts import (
     EvaluationSuite,
     GroundingEvaluation,
     RepeatedObservations,
+    SensitiveDataPolicy,
     StabilityPolicy,
     ToolTraceExpectation,
     TrajectoryPolicy,
 )
 from evalforge.engine import evaluate_suite
 from evalforge.grounding import GROUNDING_SEMANTICS_VERSION, evaluate_grounding
+from evalforge.leakage import (
+    LEAKAGE_SEMANTICS_VERSION,
+    scan_sensitive_json,
+    scan_sensitive_outputs,
+)
 from evalforge.provenance import (
     CANONICALIZATION_VERSION,
     EVALUATION_SEMANTICS_VERSION,
@@ -142,6 +148,8 @@ def _read_json(path: Path, *, label: str) -> object:
             "trajectory_policy": "trajectory policy is invalid or ambiguous",
             "trajectory": "trajectory is invalid or ambiguous",
             "grounding": "grounding input is invalid or ambiguous",
+            "leakage_policy": "sensitive-data policy is invalid or ambiguous",
+            "report": "report input is invalid or ambiguous",
         }
         message = messages[label]
         raise typer.BadParameter(message) from exc
@@ -370,6 +378,101 @@ def grounding_command(
     typer.echo(f"Context utilization: {report.metrics.context_utilization:.2%}")
     typer.echo(f"Lexical grounding: {report.metrics.lexical_grounding:.2%}")
     typer.echo(f"Grounding gate: {'PASS' if report.release_ready else 'FAIL'}")
+    if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+@app.command("scan-leakage")
+def scan_leakage_command(
+    outputs_path: Path,
+    policy_path: Annotated[Path, typer.Option("--policy")],
+    report_path: Annotated[Path, typer.Option()] = Path("reports/leakage.json"),
+) -> None:
+    """Detect sensitive values in candidate outputs without copying them into reports."""
+    raw_outputs = _read_json(outputs_path, label="outputs")
+    raw_policy = _read_json(policy_path, label="leakage_policy")
+    candidate_outputs = _parse_candidate_outputs(raw_outputs)
+    if not candidate_outputs:
+        raise typer.BadParameter("outputs must contain at least one candidate output")
+    try:
+        policy = SensitiveDataPolicy.model_validate(raw_policy)
+    except ValidationError as exc:
+        raise typer.BadParameter("sensitive-data policy is invalid or ambiguous") from exc
+
+    output_text = {
+        case_id: value if isinstance(value, str) else value.output
+        for case_id, value in candidate_outputs.items()
+    }
+    report = scan_sensitive_outputs(output_text, policy)
+    outputs_sha256 = canonical_json_sha256(cast(JsonValue, raw_outputs))
+    policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
+    scan_id = canonical_json_sha256(
+        {
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "leakage_semantics_version": LEAKAGE_SEMANTICS_VERSION,
+            "outputs_sha256": outputs_sha256,
+            "policy_sha256": policy_sha256,
+            "scan_id_schema_version": 1,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "outputs_sha256": outputs_sha256,
+        "policy_sha256": policy_sha256,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "leakage_semantics_version": LEAKAGE_SEMANTICS_VERSION,
+        "scan_id": scan_id,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    typer.echo(f"Sensitive-data report: {report_path}")
+    typer.echo(f"Findings: {report.total_findings}")
+    typer.echo(f"Sensitive-data gate: {'PASS' if report.release_ready else 'FAIL'}")
+    if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+@app.command("scan-report-leakage")
+def scan_report_leakage_command(
+    source_report_path: Path,
+    policy_path: Annotated[Path, typer.Option("--policy")],
+    report_path: Annotated[Path, typer.Option()] = Path("reports/report-leakage.json"),
+) -> None:
+    """Detect sensitive values nested in an evaluation report."""
+    raw_report = _read_json(source_report_path, label="report")
+    raw_policy = _read_json(policy_path, label="leakage_policy")
+    try:
+        policy = SensitiveDataPolicy.model_validate(raw_policy)
+    except ValidationError as exc:
+        raise typer.BadParameter("sensitive-data policy is invalid or ambiguous") from exc
+
+    report = scan_sensitive_json(raw_report, policy)
+    report_sha256 = canonical_json_sha256(cast(JsonValue, raw_report))
+    policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
+    report_scan_id = canonical_json_sha256(
+        {
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "leakage_semantics_version": LEAKAGE_SEMANTICS_VERSION,
+            "policy_sha256": policy_sha256,
+            "report_sha256": report_sha256,
+            "report_scan_id_schema_version": 1,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "report_sha256": report_sha256,
+        "policy_sha256": policy_sha256,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "leakage_semantics_version": LEAKAGE_SEMANTICS_VERSION,
+        "report_scan_id": report_scan_id,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    typer.echo(f"Sensitive-data report: {report_path}")
+    typer.echo(f"Findings: {report.total_findings}")
+    typer.echo(f"Sensitive-data gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
         raise typer.Exit(code=1)
 

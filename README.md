@@ -30,6 +30,9 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Strict, versioned retrieved-document, answer-claim, and citation contracts
 - Citation validity, precision/recall, context utilization, and lexical grounding metrics
 - Content-redacted RAG evidence that retains document and claim IDs only
+- Deterministic secret and PII detectors for email, phone, US SSN, payment-card, API-key, and private-key patterns
+- Digest allowlists, category controls, severity overrides, and configurable blocking severities
+- Redacted leakage findings for candidate outputs and nested evaluation-report values
 - Redaction-safe tool evidence using canonical value digests instead of raw arguments/results
 - Deterministic exact-call precision, recall, and component match counts
 - Non-empty and unique case-ID validation
@@ -79,6 +82,14 @@ uv run evalforge trajectory examples/trajectory-policy.json \
 
 uv run evalforge grounding examples/grounding.json \
   --report-path reports/grounding.json
+
+uv run evalforge scan-leakage examples/leakage-outputs.json \
+  --policy examples/leakage-policy.json \
+  --report-path reports/leakage.json
+
+uv run evalforge scan-report-leakage reports/example.json \
+  --policy examples/leakage-policy.json \
+  --report-path reports/report-leakage.json
 ```
 
 Expected console result:
@@ -110,6 +121,9 @@ Citation recall: 100.00%
 Context utilization: 50.00%
 Lexical grounding: 100.00%
 Grounding gate: PASS
+Sensitive-data report: reports/leakage.json
+Findings: 0
+Sensitive-data gate: PASS
 ```
 
 Generated reports are intentionally ignored by Git. Review `reports/example.json` locally for the aggregate verdict, ordered case-level evidence, canonical input digests, deterministic run ID, and a minimal dataset summary. Full manifest lineage is validated and content-addressed but is not copied into reports because source locations and creator identities can be sensitive. The `--dataset-manifest` option is optional so existing CLI invocations remain valid; suite and candidate digests and a run ID are always emitted.
@@ -185,6 +199,10 @@ RAG grounding evaluation uses one strict `schema_version: 1` contract containing
 
 These grounding metrics are deliberately lexical and deterministic, not semantic entailment or factuality judgments. Tokenization uses Unicode-aware case-folded word matching, ignores order and frequency, and can miss synonyms, paraphrases, negation, numerical equivalence, and contradictory passages that share vocabulary. A citation is considered supported only by complete claim-token containment; context utilization records valid references rather than relevance. Required spans make the claim set complete, but caller-selected claim granularity still affects citation recall, so compare recall only under the same versioned claim-generation policy. The report's canonical input digest binds the hidden source text, so reports containing low-entropy inputs should still be protected against offline guessing. Use these measurements as reproducible offline signals alongside domain review or a separately governed semantic judge, not as proof that an answer is true.
 
+Sensitive-data scanning uses fixed deterministic detectors for email addresses, North American phone numbers, structurally valid US Social Security numbers, Luhn-valid payment-card numbers, labeled or common-prefixed API keys, and PEM private-key material. `scan-leakage` scans candidate output text; `scan-report-leakage` recursively scans string values in an evaluation report. A strict `schema_version: 1` policy selects enabled categories, overrides category severities, and chooses which severities block release. False positives can be suppressed without storing plaintext in policy by listing exact lowercase SHA-256 digests in `allowlisted_value_sha256`; the digest must be computed from the detector's exact matched value. Findings contain only a zero-based string index, category, and severity—never the matched value, output ID, JSON key, or source text. See [`examples/leakage-policy.json`](examples/leakage-policy.json) and [`examples/leakage-outputs.json`](examples/leakage-outputs.json).
+
+These detectors are intentionally conservative pattern checks, not proof of identity or secret validity. Phone and email syntax can match public or fictional values, only US SSN structure is recognized, API-key formats evolve, and encoded or obfuscated values may be missed. Digest allowlists can be brute-forced for low-entropy values and must be reviewed as security configuration. Keep source inputs and generated scan reports in controlled artifact storage even though findings are redacted.
+
 An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
 
 ## Release-gate behavior
@@ -218,6 +236,8 @@ context_utilization = documents_used_by_valid_citations / retrieved_documents
 lexical_grounding = unique_answer_tokens_found_in_context / unique_answer_tokens
 grounding_ready = citation_validity == citation_precision == citation_recall == 1
                   and lexical_grounding == 1
+
+sensitive_data_ready = no finding severity appears in blocking_severities
 ```
 
 The report is written for both passing and failing evaluations. Report schema version `5` retains the unweighted count-based pass rate for diagnostics, weighted totals, the weighted release rate, case quality dimensions, deterministic category/tag slices, and machine-readable quality-gate failures. It adds optional per-case performance evidence, deterministic latency/cost aggregates, and ordered `resource_gate_failures` with observed and required integer values. Reports also record metric evidence plus each effective threshold and precedence source, canonical suite and candidate SHA-256 digests, an optional manifest digest and minimal dataset summary, explicit canonicalization and evaluation-semantics versions, and a deterministic run ID derived from that versioned preimage. Digests are computed from each successfully parsed and validated raw JSON value before typed-model normalization, so an independently computed canonical digest matches the report. Canonicalization sorts keys, uses compact UTF-8 JSON, rejects non-finite numbers and lone surrogates, and normalizes negative zero to zero. Evaluation semantics version `3` binds resource-gate behavior and the runtime Unicode database version used by whitespace trimming and case folding. A failed gate exits with status `1`, making the command suitable for CI. Invalid command input exits with a usage error and does not write a misleading report.
@@ -231,6 +251,8 @@ Tool-trace report schema version `1` preserves observed call order and emits too
 Trajectory report schema version `1` emits deterministic transition and violation counts, sequence and termination scores, ordered findings, and a release verdict. The CLI binds canonical policy and trajectory hashes, canonicalization and trajectory-semantics versions, and a deterministic `trajectory_id`. A finding writes diagnostic evidence and exits `1`; a valid trajectory exits `0`; malformed input writes no report and exits with a usage error.
 
 Grounding report schema version `1` emits document-ID-only retrieval evidence, claim/document citation IDs, Boolean validity/support evidence, deterministic metrics, and ordered invalid-reference, unsupported-citation, and uncited-claim findings. The CLI binds a canonical input digest, canonicalization and grounding-semantics versions (including the runtime Unicode database used for lexical tokenization), and a deterministic `grounding_id`; raw answer, claim, document text, and answer spans are excluded. Identical inputs under the same reported grounding-semantics version serialize byte-for-byte identically. Malformed inputs write no report, a failed gate writes evidence and exits `1`, and a passing gate exits `0`.
+
+Sensitive-data report schema version `1` emits deterministic category/severity findings and a release verdict without matched values or caller-provided output IDs. Output and report scan commands bind canonical input and policy digests, canonicalization and Unicode-bound detector-semantics versions, and deterministic scan IDs. Invalid policies write no report; blocking findings write redacted evidence and exit `1`; clean or non-blocking findings exit `0`.
 
 ## Architecture
 

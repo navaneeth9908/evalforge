@@ -602,6 +602,83 @@ class GroundingReport(BaseModel):
     release_ready: bool
 
 
+SensitiveDataCategory = Literal[
+    "email_address",
+    "phone_number",
+    "us_ssn",
+    "credit_card",
+    "api_key",
+    "private_key",
+]
+
+
+class SensitiveDataPolicy(BaseModel):
+    """Versioned configuration for deterministic sensitive-output scanning."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    enabled_categories: tuple[SensitiveDataCategory, ...] = Field(
+        default=(
+            "email_address",
+            "phone_number",
+            "us_ssn",
+            "credit_card",
+            "api_key",
+            "private_key",
+        ),
+        min_length=1,
+        max_length=6,
+    )
+    allowlisted_value_sha256: tuple[Sha256Digest, ...] = Field(default=(), max_length=10000)
+    severity_overrides: dict[SensitiveDataCategory, Severity] = Field(
+        default_factory=dict, max_length=6
+    )
+    blocking_severities: tuple[Severity, ...] = Field(
+        default=("high", "critical"), min_length=1, max_length=4
+    )
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_unique_controls(self) -> Self:
+        if len(set(self.enabled_categories)) != len(self.enabled_categories):
+            raise ValueError("enabled sensitive-data categories must be unique")
+        if len(set(self.allowlisted_value_sha256)) != len(self.allowlisted_value_sha256):
+            raise ValueError("allowlisted sensitive-value digests must be unique")
+        if len(set(self.blocking_severities)) != len(self.blocking_severities):
+            raise ValueError("blocking sensitive-data severities must be unique")
+        if any(category not in self.enabled_categories for category in self.severity_overrides):
+            raise ValueError("severity overrides must refer to enabled categories")
+        return self
+
+
+class SensitiveDataFinding(BaseModel):
+    """Redacted sensitive-data evidence that never retains the matched value."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    output_index: int = Field(ge=0, strict=True)
+    category: SensitiveDataCategory
+    severity: Severity
+
+
+class SensitiveDataReport(BaseModel):
+    """Versioned deterministic sensitive-output gate verdict."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    total_findings: int = Field(ge=0, strict=True)
+    findings: tuple[SensitiveDataFinding, ...] = ()
+    release_ready: bool
+
+
 class DatasetLineage(BaseModel):
     """Human-auditable origin and transformation metadata."""
 

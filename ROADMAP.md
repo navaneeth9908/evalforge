@@ -24,7 +24,7 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 - [x] Agent-trajectory ordering and state-transition checks
 - [x] Retrieval citation, grounding, and attribution metrics
 - [ ] Prompt-injection and policy-adherence suites
-- [ ] PII and secret-leakage detectors
+- [x] PII and secret-leakage detectors
 
 ## Model and human judgment
 
