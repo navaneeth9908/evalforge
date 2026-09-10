@@ -6,7 +6,7 @@
 
 Production-grade evaluation evidence and release gates for LLM and AI-agent systems.
 
-EvalForge turns versioned test cases and candidate outputs into an auditable report and a machine-readable release decision. The initial implementation is deliberately deterministic and offline: it requires no provider credentials, makes no network calls, and fails closed when evaluation evidence is missing or ambiguous.
+EvalForge turns versioned test cases and candidate outputs into an auditable report and a machine-readable release decision. Evaluation remains deterministic and offline by default; an explicit OpenAI-compatible generation command provides bounded provider access when configured. Evaluation fails closed when evidence is missing or ambiguous.
 
 ## Why this project
 
@@ -35,6 +35,13 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Redacted leakage findings for candidate outputs and nested evaluation-report values
 - Redaction-safe tool evidence using canonical value digests instead of raw arguments/results
 - Deterministic exact-call precision, recall, and component match counts
+- Provider-neutral generation contracts and an OpenAI-compatible adapter with independent connect, read, and overall deadlines
+- Bounded exponential retry for transient failures with injectable timing/randomness and sanitized per-attempt evidence
+- One-mebibyte provider response reads, bounded generated text, strict response parsing, and secret-safe failures
+- Versioned rubric, dimension, judge-score, and report contracts with strict numeric thresholds
+- Provider-neutral structured-judge requests carrying a dimension-specific JSON Schema
+- Weighted dimension and aggregate threshold evidence with fail-closed release decisions
+- Canonical JSON prompt framing that separates trusted judge instructions from untrusted task and candidate text
 - Non-empty and unique case-ID validation
 - Exact candidate-output accounting with no silent omissions or extras
 - Finite minimum pass-rate validation
@@ -51,7 +58,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The broader platform roadmap—including safety metrics, model judges, OpenTelemetry, APIs, dashboards, and CI reports—is tracked in [ROADMAP.md](ROADMAP.md). Planned features are not presented as implemented.
+The broader platform roadmap—including a human-review queue, OpenTelemetry, APIs, dashboards, and richer CI reports—is tracked in [ROADMAP.md](ROADMAP.md). Planned features are not presented as implemented.
 
 ## Quick start
 
@@ -91,6 +98,76 @@ uv run evalforge scan-report-leakage reports/example.json \
   --policy examples/leakage-policy.json \
   --report-path reports/report-leakage.json
 ```
+
+Provider generation is opt-in and reads configuration only from the environment:
+
+```bash
+EVALFORGE_OPENAI_BASE_URL=https://provider.example/v1 \
+EVALFORGE_OPENAI_MODEL=candidate-model \
+EVALFORGE_OPENAI_API_KEY=... \
+uv run evalforge generate-openai examples/suite.json \
+  --outputs-path reports/openai-outputs.json
+```
+
+Use `EVALFORGE_OPENAI_CONNECT_TIMEOUT_SECONDS` (default `5`, maximum `120`),
+`EVALFORGE_OPENAI_READ_TIMEOUT_SECONDS` (default `30`, maximum `120`), and
+`EVALFORGE_OPENAI_OVERALL_TIMEOUT_SECONDS` (default `60`, maximum `600`) for
+independent deadlines. Retries are controlled by `EVALFORGE_OPENAI_MAX_ATTEMPTS`
+(default `3`, maximum `10`), `EVALFORGE_OPENAI_INITIAL_BACKOFF_SECONDS` (default
+`0.25`), `EVALFORGE_OPENAI_MAX_BACKOFF_SECONDS` (default `4`, maximum `60`), and
+`EVALFORGE_OPENAI_JITTER_RATIO` (default `0.2`, range `0` to `1`). The legacy
+`EVALFORGE_OPENAI_TIMEOUT_SECONDS` keeps single-attempt behavior.
+
+Only timeouts, transport failures, HTTP `408`/`425`, rate limits, and server
+errors are retried. Attempt evidence records sanitized outcomes, durations, and
+retry delays without retaining prompts, credentials, response bodies, or endpoint
+details. Responses are read with a 1 MiB limit and generated text is capped at
+65,536 characters.
+
+## Structured rubric judging
+
+Rubric judging is provider-neutral and can be exercised without credentials or network access.
+An adapter receives a `JudgeRequest` with a trusted `system_prompt`, an untrusted-data
+`user_prompt`, and a dimension-specific Draft 2020-12 JSON Schema. The parser independently
+rejects malformed JSON, duplicate keys, unknown fields, coercive numeric types, oversized or
+invalid-Unicode responses, and missing, extra, duplicated, or reordered dimension IDs.
+
+```python
+from pathlib import Path
+
+from evalforge.contracts import Rubric, RubricEvaluation
+from evalforge.judging import JudgeRequest, evaluate_with_rubric
+
+
+class RecordedJudge:
+    def judge(self, request: JudgeRequest) -> str:
+        assert request.response_schema["title"] == "evalforge-rubric-score-v1"
+        return Path("examples/judge-response.json").read_text(encoding="utf-8")
+
+
+rubric = Rubric.model_validate_json(Path("examples/rubric.json").read_text(encoding="utf-8"))
+evaluation = RubricEvaluation.model_validate_json(
+    Path("examples/rubric-evaluation.json").read_text(encoding="utf-8")
+)
+report = evaluate_with_rubric(rubric, evaluation, RecordedJudge())
+assert report.weighted_score == 0.825
+assert report.release_ready
+```
+
+Every dimension records the judge score, configured weight, weighted contribution, minimum
+score, and threshold result. The report also records total weight, weighted aggregate score,
+aggregate threshold, aggregate threshold result, overall summary, and final release decision.
+A release passes only when the inclusive aggregate threshold and every inclusive dimension
+threshold pass.
+
+Candidate and task text are encoded as one canonical JSON object in a dedicated user-message
+boundary; trusted rubric instructions stay in the separate system message. This prevents
+candidate text from changing prompt structure, but prompt separation is defense in depth—not a
+proof against model manipulation. Judge scores can be biased, inconsistent, or confidently
+wrong. EvalForge currently ships no live judge adapter, calibration set, multi-judge quorum, or
+human appeal workflow. Operators must provide an adapter that preserves role separation and
+enforces the supplied response schema, keep prompts and rationale evidence in controlled
+storage, and validate judge quality for their domain.
 
 Expected console result:
 

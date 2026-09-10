@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "rubric_id": "support-answer",
+  "name": "Support answer quality",
+  "minimum_weighted_score": 0.75,
+  "dimensions": [
+    {
+      "schema_version": 1,
+      "dimension_id": "accuracy",
+      "description": "The answer is factually consistent with the supplied policy.",
+      "weight": 3,
+      "minimum_score": 0.8
+    },
+    {
+      "schema_version": 1,
+      "dimension_id": "clarity",
+      "description": "The answer is concise and understandable.",
+      "weight": 1,
+      "minimum_score": 0.5
+    }
+  ]
+}

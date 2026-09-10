@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "dimensions": [
+    {
+      "schema_version": 1,
+      "dimension_id": "accuracy",
+      "score": 0.9,
+      "rationale": "Matches the stated refund period."
+    },
+    {
+      "schema_version": 1,
+      "dimension_id": "clarity",
+      "score": 0.6,
+      "rationale": "Direct and readable."
+    }
+  ],
+  "summary": "The response meets the rubric."
+}

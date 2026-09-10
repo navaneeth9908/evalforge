@@ -1283,3 +1283,165 @@ class ComparisonReport(BaseModel):
     ablation_summary: AblationSummary
     budget_failures: tuple[RegressionBudgetFailure, ...] = ()
     release_ready: bool
+
+
+RubricText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8192)]
+JudgeRationale = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)
+]
+
+
+class RubricDimension(BaseModel):
+    """One versioned weighted criterion and its required minimum score."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    dimension_id: SliceLabel
+    description: RubricText
+    weight: CaseWeight
+    minimum_score: ScoreThreshold = 0.0
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("weight", "minimum_score", mode="before")
+    @classmethod
+    def require_numeric_values(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+
+class Rubric(BaseModel):
+    """Versioned rubric with dimension and aggregate release thresholds."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    rubric_id: SliceLabel
+    name: NonEmptyText
+    minimum_weighted_score: ScoreThreshold
+    dimensions: tuple[RubricDimension, ...] = Field(min_length=1, max_length=100)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("minimum_weighted_score", mode="before")
+    @classmethod
+    def require_numeric_threshold(cls, value: object) -> object:
+        return _require_json_number(value, field_name="minimum_weighted_score")
+
+    @field_validator("dimensions")
+    @classmethod
+    def require_unique_dimensions(
+        cls, value: tuple[RubricDimension, ...]
+    ) -> tuple[RubricDimension, ...]:
+        if len({dimension.dimension_id for dimension in value}) != len(value):
+            raise ValueError("rubric dimension IDs must be unique")
+        return value
+
+
+class RubricEvaluation(BaseModel):
+    """Versioned task and untrusted candidate output submitted to a judge."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    prompt: PromptText
+    candidate_output: OutputText
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+
+class JudgeDimensionScore(BaseModel):
+    """One versioned structured score returned by a model judge."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    dimension_id: SliceLabel
+    score: ScoreThreshold
+    rationale: JudgeRationale
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def require_numeric_score(cls, value: object) -> object:
+        return _require_json_number(value, field_name="score")
+
+
+class JudgeScoreResponse(BaseModel):
+    """Versioned JSON response contract required from a structured judge."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    dimensions: tuple[JudgeDimensionScore, ...] = Field(min_length=1, max_length=100)
+    summary: JudgeRationale
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("dimensions")
+    @classmethod
+    def require_unique_dimensions(
+        cls, value: tuple[JudgeDimensionScore, ...]
+    ) -> tuple[JudgeDimensionScore, ...]:
+        if len({dimension.dimension_id for dimension in value}) != len(value):
+            raise ValueError("judge dimension IDs must be unique")
+        return value
+
+
+class RubricDimensionEvidence(BaseModel):
+    """Versioned score, weighting, and threshold evidence for one dimension."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    dimension_id: SliceLabel
+    score: ScoreThreshold
+    weight: CaseWeight
+    weighted_contribution: float = Field(ge=0.0, le=1_000_000.0, allow_inf_nan=False)
+    minimum_score: ScoreThreshold
+    threshold_passed: bool
+    rationale: JudgeRationale
+
+
+class RubricJudgeReport(BaseModel):
+    """Versioned aggregate judge evidence and fail-closed release decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    rubric_id: SliceLabel
+    dimensions: tuple[RubricDimensionEvidence, ...]
+    total_weight: float = Field(gt=0.0, le=100_000_000.0, allow_inf_nan=False)
+    weighted_score: ScoreThreshold
+    minimum_weighted_score: ScoreThreshold
+    aggregate_threshold_passed: bool
+    release_ready: bool
+    summary: JudgeRationale

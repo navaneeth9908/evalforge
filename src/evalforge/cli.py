@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from math import isfinite
 from pathlib import Path
 from typing import Annotated, cast
@@ -39,6 +40,7 @@ from evalforge.provenance import (
     canonical_json_sha256,
     deterministic_run_id,
 )
+from evalforge.providers import GenerationRequest, ProviderError, openai_adapter_from_environment
 from evalforge.stability import analyze_stability
 from evalforge.tool_traces import TOOL_TRACE_SEMANTICS_VERSION, evaluate_tool_trace
 from evalforge.trajectories import TRAJECTORY_SEMANTICS_VERSION, evaluate_trajectory
@@ -171,6 +173,34 @@ def _parse_candidate_outputs(raw_outputs: object) -> dict[str, str | CandidateOu
 @app.callback()
 def main() -> None:
     """Run EvalForge evaluation workflows."""
+
+
+@app.command("generate-openai")
+def generate_openai_command(
+    suite_path: Path,
+    outputs_path: Annotated[Path, typer.Option()] = Path("reports/openai-outputs.json"),
+) -> None:
+    """Generate candidate outputs with explicitly configured OpenAI-compatible HTTP."""
+    raw_suite = _read_json(suite_path, label="suite")
+    try:
+        suite = EvaluationSuite.model_validate(raw_suite)
+        adapter = openai_adapter_from_environment(os.environ)
+    except ValidationError as exc:
+        raise typer.BadParameter("suite file is invalid or ambiguous") from exc
+    except ValueError:
+        raise typer.BadParameter("OpenAI-compatible environment configuration is invalid") from None
+
+    try:
+        outputs = {
+            case.case_id: adapter.generate(GenerationRequest(prompt=case.prompt)).text
+            for case in suite.cases
+        }
+    except ProviderError:
+        raise typer.BadParameter("OpenAI-compatible generation failed") from None
+
+    outputs_path.parent.mkdir(parents=True, exist_ok=True)
+    outputs_path.write_text(f"{json.dumps(outputs, indent=2)}\n", encoding="utf-8")
+    typer.echo(f"Generated candidate outputs: {outputs_path}")
 
 
 @app.command("evaluate")

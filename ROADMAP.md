@@ -28,16 +28,16 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 
 ## Model and human judgment
 
-- [ ] Provider-neutral candidate adapter contract with deterministic fakes
-- [ ] OpenAI-compatible candidate adapter with explicit runtime boundaries
-- [ ] Structured rubric and model-based judge
+- [x] Provider-neutral candidate adapter contract with deterministic fakes
+- [x] OpenAI-compatible candidate adapter with bounded deadlines, retries, response limits, redaction, and attempt evidence
+- [x] Structured rubric and model-based judge with schema-constrained responses, injection-resistant framing, and deterministic fake coverage
 - [ ] Human-review queue with portable decisions
 
 ## Platform
 
 - [ ] SQLite run registry and reproducible run manifests
 - [ ] FastAPI endpoints for suites, runs, and reports
-- [ ] Bounded asynchronous execution, retries, and deadlines
+- [ ] Bounded asynchronous execution
 - [ ] OpenTelemetry traces and evaluation metrics
 - [ ] Analyst dashboard for runs, regressions, and evidence
 
