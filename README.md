@@ -42,6 +42,10 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Provider-neutral structured-judge requests carrying a dimension-specific JSON Schema
 - Weighted dimension and aggregate threshold evidence with fail-closed release decisions
 - Canonical JSON prompt framing that separates trusted judge instructions from untrusted task and candidate text
+- Repeated, label-blinded judge calibration with agreement and score-drift release gates
+- Alternating-order position probes, matched verbosity probes, and synthetic-label calibration error
+- Deterministic human-review selection for low-confidence and judge-disagreement evidence
+- Privacy-aware JSONL queues, portable reviewer decisions, and conflict/adjudication summaries
 - Non-empty and unique case-ID validation
 - Exact candidate-output accounting with no silent omissions or extras
 - Finite minimum pass-rate validation
@@ -58,7 +62,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The broader platform roadmap—including a human-review queue, OpenTelemetry, APIs, dashboards, and richer CI reports—is tracked in [ROADMAP.md](ROADMAP.md). Planned features are not presented as implemented.
+The broader platform roadmap—including OpenTelemetry, APIs, dashboards, and richer CI reports—is tracked in [ROADMAP.md](ROADMAP.md). Planned features are not presented as implemented.
 
 ## Quick start
 
@@ -164,10 +168,59 @@ Candidate and task text are encoded as one canonical JSON object in a dedicated 
 boundary; trusted rubric instructions stay in the separate system message. This prevents
 candidate text from changing prompt structure, but prompt separation is defense in depth—not a
 proof against model manipulation. Judge scores can be biased, inconsistent, or confidently
-wrong. EvalForge currently ships no live judge adapter, calibration set, multi-judge quorum, or
-human appeal workflow. Operators must provide an adapter that preserves role separation and
+wrong. EvalForge ships no live judge adapter, multi-judge quorum, or hosted reviewer UI.
+Operators must provide an adapter that preserves role separation and
 enforces the supplied response schema, keep prompts and rationale evidence in controlled
 storage, and validate judge quality for their domain.
+
+### Judge reliability and calibration
+
+`measure_judge_reliability` runs a bounded synthetic-label `CalibrationDataset` two to ten times.
+Case IDs, synthetic labels, pair metadata, repetition numbers, positions, and generated blind IDs
+are withheld from every `JudgeRequest`; only the task and candidate text needed for judging cross
+the existing untrusted-data boundary. Cases run in declared order on odd repetitions and reversed
+order on even repetitions. This creates deterministic, offline-testable repeated and mirrored-
+position observations without pretending that synthetic labels are ground truth.
+
+For case score `s(i,r)`, `N` cases, and `R` repetitions, the report uses these formulas:
+
+- **Agreement:** the fraction of all `N * R * (R - 1) / 2` within-case unordered score pairs for
+  which `abs(s(i,r) - s(i,t)) <= agreement_tolerance`.
+- **Drift:** `abs(mean_i(s(i,1)) - mean_i(s(i,R)))`, the absolute dataset-mean change from the
+  first to the final repetition.
+- **Maximum position delta:** the largest per-case absolute difference between its mean score in
+  odd (forward-order) repetitions and its mean score in even (reverse-order) repetitions.
+- **Verbosity bias:** for each validated concise/verbose pair sharing a prompt and synthetic label,
+  the absolute difference between the variants' repeated-score means, averaged across pairs.
+- **Calibration MAE:** `mean_i(abs(mean_r(s(i,r)) - synthetic_label(i)))`.
+
+Agreement and drift are inclusive release gates: agreement must be at least `minimum_agreement`,
+and drift must be at most `maximum_drift`. Gate failures retain observed and required values.
+Position, verbosity, and calibration metrics are diagnostic evidence rather than release gates so
+operators can set domain-appropriate policies around them. Reports preserve case IDs for audit;
+the judge sees only opaque task/output inputs before each observation is associated with its case.
+
+### Human review and adjudication
+
+`select_review_queue` applies inclusive, versioned low-confidence and judge-score-disagreement
+thresholds, then orders selected items deterministically by reason count, confidence,
+disagreement, and case ID. Every item retains a frozen `ReviewCandidate` and a canonical SHA-256
+digest of that original evidence. The item ID is content-addressed from the evidence and queue
+policy, so importing decisions never replaces or edits the evidence that was actually reviewed.
+
+`export_review_queue_jsonl` emits one versioned portable item per line. Its default `redacted`
+mode excludes prompt and candidate-output text while retaining case, selection, score, policy,
+and evidence-digest fields. `full` mode is an explicit opt-in for controlled reviewer systems.
+Digest-only rows can still expose low-entropy values to guessing attacks, so queue files and
+original evidence remain controlled artifacts rather than public reports.
+
+`import_review_queue_jsonl` rejects duplicate keys, malformed or coercive contracts, mixed policy
+digests, duplicate item/case IDs, non-contiguous ordering, invalid Unicode, and inputs over 1 MiB
+or 10,000 rows. Reviewer decisions require versioned identity, source, session, and valid UTC-time
+provenance plus the original evidence digest. Decision import rejects unknown or altered evidence,
+duplicate decisions, repeated reviewer roles, and adjudication without conflicting reviewer
+outcomes. `summarize_adjudication` reports pending work, unanimous agreement, unresolved conflict,
+and adjudicator-resolved outcomes without copying prompt or output text into the summary.
 
 Expected console result:
 

@@ -31,7 +31,8 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 - [x] Provider-neutral candidate adapter contract with deterministic fakes
 - [x] OpenAI-compatible candidate adapter with bounded deadlines, retries, response limits, redaction, and attempt evidence
 - [x] Structured rubric and model-based judge with schema-constrained responses, injection-resistant framing, and deterministic fake coverage
-- [ ] Human-review queue with portable decisions
+- [x] Repeated blinded judge calibration with agreement/drift gates and order, position, and verbosity-bias diagnostics
+- [x] Human-review queue with privacy-aware portable decisions and adjudication summaries
 
 ## Platform
 
