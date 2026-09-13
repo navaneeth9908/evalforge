@@ -57,6 +57,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - JSON report output with canonical suite and candidate SHA-256 digests
 - Deterministic run IDs bound to content-addressed inputs and versioned evaluator semantics
 - Strict, versioned dataset manifests with lineage and suite-integrity validation
+- Transactional SQLite run registry with immutable, content-addressed suite and report evidence
+- Versioned FastAPI endpoints for suite creation, evaluation, run history, and report retrieval
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
 - Nonzero CLI exit status when a release gate fails
 - Friendly validation for malformed candidate-output JSON
@@ -127,6 +129,24 @@ errors are retried. Attempt evidence records sanitized outcomes, durations, and
 retry delays without retaining prompts, credentials, response bodies, or endpoint
 details. Responses are read with a 1 MiB limit and generated text is capped at
 65,536 characters.
+
+## Local evaluation API
+
+The application factory keeps storage explicit so local services and tests can use an isolated
+SQLite registry. Mount the returned ASGI app in an ASGI server of your choice:
+
+```python
+from pathlib import Path
+
+from evalforge.api import create_app
+
+app = create_app(Path("artifacts/evalforge.db"))
+```
+
+The versioned `/api/v1` surface provides health, suite creation/listing, synchronous evaluation,
+run history, and immutable report retrieval. Pagination and request sizes are bounded. Validation,
+missing-resource, and unexpected errors use redaction-safe envelopes that do not echo submitted
+prompts, candidate outputs, database details, or exception traces.
 
 ## Structured rubric judging
 

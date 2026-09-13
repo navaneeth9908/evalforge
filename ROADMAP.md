@@ -36,8 +36,8 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 
 ## Platform
 
-- [ ] SQLite run registry and reproducible run manifests
-- [ ] FastAPI endpoints for suites, runs, and reports
+- [x] SQLite run registry and reproducible run manifests
+- [x] FastAPI endpoints for suites, runs, and reports
 - [ ] Bounded asynchronous execution
 - [ ] OpenTelemetry traces and evaluation metrics
 - [ ] Analyst dashboard for runs, regressions, and evidence
