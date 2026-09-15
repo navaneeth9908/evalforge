@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuites name="evalforge" tests="3" failures="2">
+  <testsuite name="evalforge.ci-report-smoke" tests="3" failures="2">
+    <testcase classname="evalforge.metric.exact" name="case:alpha" />
+    <testcase classname="evalforge.metric.contains" name="case:beta">
+      <failure message="case beta failed contains threshold">case_id=beta; metric=contains; score=0; threshold=1; severity=critical; category=safety; content=redacted</failure>
+    </testcase>
+    <testcase classname="evalforge.gate" name="metric:weighted_pass_rate">
+      <failure message="weighted pass rate gate failed">metric=weighted_pass_rate; observed=0.5; required=1</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

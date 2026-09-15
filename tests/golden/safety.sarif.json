@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "EvalForge",
+          "informationUri": "https://github.com/navaneeth9908/evalforge",
+          "semanticVersion": "0.1.0",
+          "rules": [
+            {
+              "id": "evalforge.sensitive-data.api-key",
+              "name": "api_key",
+              "shortDescription": {
+                "text": "Sensitive-data finding: api key"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              }
+            },
+            {
+              "id": "evalforge.sensitive-data.email-address",
+              "name": "email_address",
+              "shortDescription": {
+                "text": "Sensitive-data finding: email address"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "evalforge.sensitive-data.email-address",
+          "ruleIndex": 1,
+          "level": "warning",
+          "message": {
+            "text": "EvalForge detected redacted email address evidence in candidate output 0; raw evidence is omitted."
+          },
+          "partialFingerprints": {
+            "evalforgeFinding/v1": "008ceaaa0df46ce165cb363652eed881b027541afef8e10c40cdaa3d6ac698a1"
+          },
+          "properties": {
+            "outputIndex": 0,
+            "severity": "medium",
+            "evidence": "redacted"
+          }
+        },
+        {
+          "ruleId": "evalforge.sensitive-data.api-key",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "EvalForge detected redacted api key evidence in candidate output 1; raw evidence is omitted."
+          },
+          "partialFingerprints": {
+            "evalforgeFinding/v1": "196499224dab8fbcf9db0cb40a619e11804f2966eb9f075e2e998c2a01726307"
+          },
+          "properties": {
+            "outputIndex": 1,
+            "severity": "critical",
+            "evidence": "redacted"
+          }
+        }
+      ],
+      "properties": {
+        "releaseReady": false,
+        "totalFindings": 2
+      }
+    }
+  ]
+}

@@ -33,6 +33,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Deterministic secret and PII detectors for email, phone, US SSN, payment-card, API-key, and private-key patterns
 - Digest allowlists, category controls, severity overrides, and configurable blocking severities
 - Redacted leakage findings for candidate outputs and nested evaluation-report values
+- Deterministic JUnit case/metric reports and redacted SARIF safety findings
+- Reusable least-privilege GitHub Actions release gates with immutable action pins
 - Redaction-safe tool evidence using canonical value digests instead of raw arguments/results
 - Deterministic exact-call precision, recall, and component match counts
 - Provider-neutral generation contracts and an OpenAI-compatible adapter with independent connect, read, and overall deadlines
@@ -76,7 +78,8 @@ cd evalforge
 uv sync --group dev
 uv run evalforge evaluate examples/suite.json examples/outputs.json \
   --dataset-manifest examples/dataset-manifest.json \
-  --report-path reports/example.json
+  --report-path reports/example.json \
+  --junit-path reports/evaluation.junit.xml
 
 uv run evalforge compare examples/suite.json examples/baseline-outputs.json \
   examples/outputs.json --comparison-policy examples/comparison-policy.json \
@@ -98,7 +101,8 @@ uv run evalforge grounding examples/grounding.json \
 
 uv run evalforge scan-leakage examples/leakage-outputs.json \
   --policy examples/leakage-policy.json \
-  --report-path reports/leakage.json
+  --report-path reports/leakage.json \
+  --sarif-path reports/safety.sarif.json
 
 uv run evalforge scan-report-leakage reports/example.json \
   --policy examples/leakage-policy.json \
@@ -353,6 +357,12 @@ Sensitive-data scanning uses fixed deterministic detectors for email addresses, 
 
 These detectors are intentionally conservative pattern checks, not proof of identity or secret validity. Phone and email syntax can match public or fictional values, only US SSN structure is recognized, API-key formats evolve, and encoded or obfuscated values may be missed. Digest allowlists can be brute-forced for low-entropy values and must be reviewed as security configuration. Keep source inputs and generated scan reports in controlled artifact storage even though findings are redacted.
 
+### CI-native reports
+
+`evaluate --junit-path` writes one stable JUnit testcase for every evaluated case, the weighted pass-rate gate, and each observed latency/cost metric. Failure details contain IDs, scores, thresholds, severities, categories, and resource limits, but never expected or candidate output text. `scan-leakage --sarif-path` writes SARIF 2.1.0 rules and results with stable rule IDs and fingerprints; evidence is always the literal `redacted`. Both artifacts are written before a failed release gate returns status `1`, so CI can publish diagnostics without weakening enforcement.
+
+The reusable [EvalForge release reports workflow](.github/workflows/evalforge-reports.yml) accepts suite, output, and leakage-policy paths. It installs only the committed lockfile, uploads JSON/JUnit/SARIF artifacts, publishes SARIF to GitHub code scanning, and fails when either evaluation or safety gates fail. Callers grant only `contents: read` and `security-events: write`; all third-party actions are pinned to verified 40-character commit SHAs. The main CI workflow dogfoods this reusable workflow on pushes to `main` with the synthetic examples.
+
 An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
 
 ## Release-gate behavior
@@ -433,7 +443,7 @@ uv run --group dev pytest --cov=evalforge --cov-branch --cov-report=term-missing
 uv build
 ```
 
-CI runs formatting, lint, strict type checking, branch-covered tests, and package builds from the committed lockfile. Third-party GitHub Actions are pinned to immutable commit SHAs.
+CI runs formatting, lint, strict type checking, branch-covered tests, package builds, JUnit export, and SARIF publication from the committed lockfile. Third-party GitHub Actions are pinned to immutable commit SHAs.
 
 ## Repository layout
 

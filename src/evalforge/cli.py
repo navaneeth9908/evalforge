@@ -11,6 +11,7 @@ from typing import Annotated, cast
 import typer
 from pydantic import ValidationError
 
+from evalforge.ci_reporting import evaluation_report_to_junit, sensitive_data_report_to_sarif
 from evalforge.comparison import compare_evaluations
 from evalforge.contracts import (
     AgentToolTrace,
@@ -209,6 +210,7 @@ def evaluate_command(
     outputs_path: Path,
     report_path: Annotated[Path, typer.Option()] = Path("reports/evaluation.json"),
     dataset_manifest: Annotated[Path | None, typer.Option()] = None,
+    junit_path: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     """Evaluate candidate outputs against a versioned deterministic suite."""
     raw_suite = _read_json(suite_path, label="suite")
@@ -269,8 +271,15 @@ def evaluate_command(
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+    if junit_path is not None:
+        junit_path.parent.mkdir(parents=True, exist_ok=True)
+        junit_path.write_text(
+            evaluation_report_to_junit(report, suite_name=suite.name), encoding="utf-8"
+        )
 
     typer.echo(f"Evaluation report: {report_path}")
+    if junit_path is not None:
+        typer.echo(f"JUnit report: {junit_path}")
     typer.echo(f"Weighted pass rate: {report.weighted_pass_rate:.2%}")
     typer.echo(f"Release gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
@@ -417,6 +426,7 @@ def scan_leakage_command(
     outputs_path: Path,
     policy_path: Annotated[Path, typer.Option("--policy")],
     report_path: Annotated[Path, typer.Option()] = Path("reports/leakage.json"),
+    sarif_path: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     """Detect sensitive values in candidate outputs without copying them into reports."""
     raw_outputs = _read_json(outputs_path, label="outputs")
@@ -455,8 +465,13 @@ def scan_leakage_command(
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+    if sarif_path is not None:
+        sarif_path.parent.mkdir(parents=True, exist_ok=True)
+        sarif_path.write_text(sensitive_data_report_to_sarif(report), encoding="utf-8")
 
     typer.echo(f"Sensitive-data report: {report_path}")
+    if sarif_path is not None:
+        typer.echo(f"SARIF report: {sarif_path}")
     typer.echo(f"Findings: {report.total_findings}")
     typer.echo(f"Sensitive-data gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:

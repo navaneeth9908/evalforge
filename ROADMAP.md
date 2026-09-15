@@ -44,8 +44,8 @@ EvalForge is being built as a production-oriented evaluation and release-gating 
 
 ## Delivery and governance
 
-- [ ] GitHub Checks and JUnit release-gate output
-- [ ] SARIF safety findings
+- [x] GitHub Actions and JUnit release-gate output
+- [x] SARIF safety findings
 - [ ] Dataset versioning and artifact-integrity verification
 - [ ] Multi-candidate matrix and higher-order ablation comparisons
 - [ ] Container image, health checks, and deployment guide
