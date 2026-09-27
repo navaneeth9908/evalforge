@@ -27,6 +27,7 @@ from evalforge.contracts import (
     ToolTraceExpectation,
     TrajectoryPolicy,
 )
+from evalforge.demo import run_synthetic_demo
 from evalforge.engine import evaluate_suite
 from evalforge.grounding import GROUNDING_SEMANTICS_VERSION, evaluate_grounding
 from evalforge.leakage import (
@@ -174,6 +175,15 @@ def _parse_candidate_outputs(raw_outputs: object) -> dict[str, str | CandidateOu
 @app.callback()
 def main() -> None:
     """Run EvalForge evaluation workflows."""
+
+
+@app.command("demo")
+def demo_command(
+    output_directory: Annotated[Path, typer.Option()] = Path("reports/demo"),
+) -> None:
+    """Run the credential-free synthetic end-to-end acceptance path."""
+    evidence = run_synthetic_demo(output_directory)
+    typer.echo(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
 
 
 @app.command("generate-openai")

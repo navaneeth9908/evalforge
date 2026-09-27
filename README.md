@@ -61,12 +61,15 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Strict, versioned dataset manifests with lineage and suite-integrity validation
 - Transactional SQLite run registry with immutable, content-addressed suite and report evidence
 - Versioned FastAPI endpoints for suite creation, evaluation, run history, and report retrieval
+- Read-only local run dashboard with escaped metadata and no candidate-text rendering
+- Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
+- Non-root container image, loopback-only Compose deployment, and bounded health smoke
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
 - Nonzero CLI exit status when a release gate fails
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The broader platform roadmap—including OpenTelemetry, APIs, dashboards, and richer CI reports—is tracked in [ROADMAP.md](ROADMAP.md). Planned features are not presented as implemented.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and basic run dashboard are implemented; hosted multi-tenant operations, authentication, and a full regression analytics dashboard remain future work and are not presented as complete.
 
 ## Quick start
 
@@ -75,7 +78,11 @@ Prerequisites: Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
 ```bash
 git clone https://github.com/navaneeth9908/evalforge.git
 cd evalforge
-uv sync --group dev
+uv sync --frozen --group dev
+
+# Run the complete credential-free product tracer bullet.
+uv run evalforge demo --output-directory reports/demo
+
 uv run evalforge evaluate examples/suite.json examples/outputs.json \
   --dataset-manifest examples/dataset-manifest.json \
   --report-path reports/example.json \
@@ -150,7 +157,22 @@ app = create_app(Path("artifacts/evalforge.db"))
 The versioned `/api/v1` surface provides health, suite creation/listing, synchronous evaluation,
 run history, and immutable report retrieval. Pagination and request sizes are bounded. Validation,
 missing-resource, and unexpected errors use redaction-safe envelopes that do not echo submitted
-prompts, candidate outputs, database details, or exception traces.
+prompts, candidate outputs, database details, or exception traces. `/dashboard` provides a basic
+read-only local run table with report links; it does not render candidate text or claim to be the
+future regression analytics UI.
+
+Run the deployable server and open `http://127.0.0.1:8000/dashboard`:
+
+```bash
+# Replace this example with an absolute writable path on your machine.
+EVALFORGE_DATABASE_PATH='C:/Users/you/evalforge/artifacts/evalforge.db' \
+uv run --frozen uvicorn --factory evalforge.server:create_app_from_environment \
+  --host 127.0.0.1 --port 8000
+```
+
+The service has no built-in authentication or TLS and is intended for loopback/private CI use in
+v0.1.0. See the [deployment guide](docs/deployment.md) and [threat model](docs/threat-model.md)
+before changing the bind address.
 
 ## Structured rubric judging
 
@@ -434,16 +456,21 @@ See [docs/architecture.md](docs/architecture.md) for implemented and target boun
 
 ## Development
 
-```bash
-uv sync --group dev
-uv run --group dev ruff format --check .
-uv run --group dev ruff check .
-uv run --group dev mypy
-uv run --group dev pytest --cov=evalforge --cov-branch --cov-report=term-missing -q
-uv build
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the frozen environment, RED–GREEN–REFACTOR workflow,
+full local release gates, review requirements, and pull-request conventions. CI runs formatting,
+lint, strict type checking, branch-covered tests, package builds, JUnit export, and SARIF
+publication from the committed lockfile. Third-party GitHub Actions are pinned to immutable commit
+SHAs.
 
-CI runs formatting, lint, strict type checking, branch-covered tests, package builds, JUnit export, and SARIF publication from the committed lockfile. Third-party GitHub Actions are pinned to immutable commit SHAs.
+## Project documentation
+
+- [Architecture and implementation boundaries](docs/architecture.md)
+- [Local and container deployment](docs/deployment.md)
+- [Threat model and trust boundaries](docs/threat-model.md)
+- [Provider, metric, schema, and persistence extensions](docs/extensions.md)
+- [v0.1.0 acceptance evidence and explicit limitations](docs/acceptance.md)
+- [Release history](CHANGELOG.md)
+- [Security policy and private reporting](SECURITY.md)
 
 ## Repository layout
 
@@ -457,7 +484,7 @@ docs/                architecture and design boundaries
 
 ## Security and privacy
 
-The example data is synthetic. Do not commit production prompts, model outputs, customer records, API keys, or generated reports. Reports can contain sensitive prompts and responses and belong in controlled artifact storage. See [SECURITY.md](SECURITY.md) for trust boundaries and responsible disclosure.
+The example data is synthetic. Do not commit production prompts, model outputs, customer records, API keys, or generated reports. Reports can contain sensitive prompts and responses and belong in controlled artifact storage. See the [threat model](docs/threat-model.md) for trust boundaries and [SECURITY.md](SECURITY.md) for responsible disclosure.
 
 ## License
 

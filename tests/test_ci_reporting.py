@@ -201,7 +201,7 @@ def test_reusable_reporting_workflow_is_pinned_least_privilege_and_dogfooded() -
     assert "contents: read" in reusable
     assert "security-events: write" in reusable
     assert reusable.count("persist-credentials: false") == 1
-    assert ci.count("persist-credentials: false") == 1
+    assert ci.count("persist-credentials: false") == ci.count("actions/checkout@") == 2
     assert "evalforge evaluate" in reusable and "--junit-path" in reusable
     assert "evalforge scan-leakage" in reusable and "--sarif-path" in reusable
     assert "github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63" in reusable

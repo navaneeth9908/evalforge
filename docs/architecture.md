@@ -1,6 +1,6 @@
 # Architecture
 
-EvalForge starts with a deterministic, offline release gate and expands toward a vendor-neutral evaluation control plane. Documentation distinguishes implemented behavior from planned components.
+EvalForge v0.1.0 combines a deterministic offline release gate with an explicit provider boundary and a local evidence control plane. Documentation distinguishes implemented behavior from planned hosted components.
 
 ## Implemented baseline
 
@@ -63,11 +63,13 @@ The trajectory engine evaluates a strict versioned policy against an ordered seq
 
 The sensitive-data engine applies fixed, bounded detectors to candidate output text or recursively to string values in evaluation reports. It recognizes common email, North American phone, structurally valid US SSN, Luhn-valid payment-card, labeled or common-prefixed API-key, and PEM private-key patterns. Policies select categories, override severities, choose blocking severities, and suppress exact known false positives with SHA-256 digests. Findings retain only a string index, category, and severity; matched text, caller IDs, keys, and source content are excluded. Canonical input and policy digests plus a Unicode-bound semantics version provide deterministic scan identity but are not confidentiality controls for low-entropy values.
 
-The structured-judge boundary validates strict versioned rubrics, dimensions, evaluations, score responses, and reports. It places trusted rubric criteria in the system message and canonicalizes task and candidate text into a single untrusted JSON value in the user message, so embedded output text cannot create new prompt records or alter the trusted instruction channel. Each request carries a rubric-specific Draft 2020-12 JSON Schema with fixed ordered dimension IDs. Independent parsing rejects duplicate keys, coercive scores, unknown fields, invalid Unicode, oversized responses, and any dimension mismatch before aggregation. Reports expose each score, weight, contribution, inclusive dimension threshold, weighted aggregate, inclusive aggregate threshold, and final gate. Deterministic recorded judges cover this boundary offline; live adapters, judge calibration, quorum decisions, and human appeals remain outside the current implementation.
+The structured-judge boundary validates strict versioned rubrics, dimensions, evaluations, score responses, and reports. It places trusted rubric criteria in the system message and canonicalizes task and candidate text into a single untrusted JSON value in the user message, so embedded output text cannot create new prompt records or alter the trusted instruction channel. Each request carries a rubric-specific Draft 2020-12 JSON Schema with fixed ordered dimension IDs. Independent parsing rejects duplicate keys, coercive scores, unknown fields, invalid Unicode, oversized responses, and any dimension mismatch before aggregation. Reports expose each score, weight, contribution, inclusive dimension threshold, weighted aggregate, inclusive aggregate threshold, and final gate. Repeated label-blinded calibration, position and verbosity probes, deterministic review selection, portable redacted queues, decision import, and adjudication summaries are implemented around the same boundary. A production live judge adapter, multi-judge quorum service, and hosted reviewer UI remain outside v0.1.0.
 
-The CLI bounds each untrusted JSON file to 1 MiB, 64 nesting levels, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. It rejects duplicate keys, non-finite constants, coercive threshold or resource-evidence types, ambiguous legacy/declarative policies, invalid comparison budgets, and invalid Unicode before evaluation. Canonicalization operates on successfully validated raw JSON values before typed-model normalization, using sorted keys, compact separators, UTF-8 encoding, non-finite-number rejection, and negative-zero normalization before computing SHA-256 digests. Every schema-version-5 evaluation report records suite and candidate digests, canonicalization and evaluator-semantics versions, a run ID bound to that complete preimage, effective thresholds and sources, weighted slice summaries, deterministic resource evidence, and machine-readable gate failures. Schema-version-3 comparison reports include two full schema-version-5 evaluations, the policy and its digest, all input digests, weighted regression evidence, deterministic deltas, matrix and ablation evidence, and a content-addressed comparison ID whose preimage is versioned at `3` and binds canonicalization semantics. Evaluator-semantics version `3` binds resource-gate behavior and includes the runtime Unicode database version used by trimming and case folding. An optional strict, versioned dataset manifest records source lineage and binds it to the suite digest; mismatches fail closed before evaluation. Reports retain only its digest and a minimal dataset ID, version, and license summary so private source locations and creator identities are not propagated.
+The CLI bounds each untrusted JSON file to 1 MiB, 64 nesting levels, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. It rejects duplicate keys, non-finite constants, coercive threshold or resource-evidence types, ambiguous legacy/declarative policies, invalid comparison budgets, and invalid Unicode before evaluation. Canonicalization operates on successfully validated raw JSON values before typed-model normalization, using sorted keys, compact separators, UTF-8 encoding, non-finite-number rejection, and negative-zero normalization before computing SHA-256 digests. Every schema-version-5 evaluation report records suite and candidate digests, canonicalization and evaluator-semantics versions, a run ID bound to that complete preimage, effective thresholds and sources, weighted slice summaries, deterministic resource evidence, and machine-readable quality or resource failures. Schema-version-3 comparison reports include two full schema-version-5 evaluations, the policy and its digest, all input digests, weighted regression evidence, deterministic deltas, matrix and ablation evidence, and a content-addressed comparison ID whose preimage is versioned at `3` and binds canonicalization semantics. Evaluator-semantics version `3` binds resource-gate behavior and includes the runtime Unicode database version used by trimming and case folding. An optional strict, versioned dataset manifest records source lineage and binds it to the suite digest; mismatches fail closed before evaluation. Reports retain only its digest and a minimal dataset ID, version, and license summary so private source locations and creator identities are not propagated.
 
-## Target architecture
+The local control plane places `EvalForgeService` between the API and a transactional SQLite `RunRegistry`. It registers canonical suites, runs the same deterministic engine, and stores immutable reports under deterministic IDs. Versioned FastAPI routes expose bounded suite/run lists and report retrieval. The basic dashboard renders only run summaries with escaped metadata and report links; candidate text is excluded. The container runs as a non-root user and the default Compose mapping is loopback-only. Authentication, multi-tenancy, a full regression analytics dashboard, and distributed execution are post-v0.1.0 work.
+
+## Control-plane direction
 
 ```mermaid
 flowchart TB
@@ -89,10 +91,10 @@ flowchart TB
     end
     subgraph Evidence
       DB[(Run registry)]
-      OT[OpenTelemetry]
-      API[FastAPI]
-      UI[Dashboard]
-      CI[CI reports]
+      OT[OpenTelemetry - planned]
+      API[FastAPI - implemented]
+      UI[Regression dashboard - planned]
+      CI[CI reports - implemented]
     end
     Inputs --> Execution --> Control --> Evidence
 ```
@@ -102,7 +104,7 @@ flowchart TB
 - **Deterministic by default:** core tests and examples make no network calls.
 - **Fail closed:** empty candidate-output scans, duplicate or malformed policy controls, blocking sensitive-data findings, empty or duplicate repeated observations, malformed or duplicate tool-call IDs, disallowed or unmatched calls, invalid or discontinuous trajectory steps, forbidden transitions, premature or missing termination, disallowed loops, missing or partial resource evidence, aggregate resource overflow, ambiguous policies, unsafe regular expressions, invalid thresholds or measurements, and mismatched case IDs stop evaluation.
 - **Evidence before verdict:** aggregate decisions retain ordered case-level results; tool-trace reports retain ordered call metadata and value digests without copying raw arguments or results; trajectory reports retain ordered rule/step findings without action payloads.
-- **Provider isolation:** future model adapters remain outside the metric and policy core.
+- **Provider isolation:** networked provider adapters remain outside the metric and policy core; offline fakes exercise the same typed boundary.
 - **No secret persistence:** credentials are supplied at runtime and never written to reports; sensitive-data findings omit matched values and use digest-only allowlists.
 - **Reproducibility:** canonical suite, baseline, candidate, policy, and optional manifest hashes plus explicit algorithm and evaluator-semantics versions identify every run or comparison; manifests retain source lineage without requiring provider access.
 

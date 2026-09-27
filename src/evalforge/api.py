@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, Query, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from evalforge.contracts import (
@@ -171,6 +172,50 @@ def _run_response(stored: StoredRun) -> RunResponse:
     )
 
 
+def _dashboard_html(runs: tuple[RunSummary, ...]) -> str:
+    rows = "".join(
+        (
+            "<tr>"
+            f'<td><span class="status {("pass" if run.release_ready else "fail")}">'
+            f"{'PASS' if run.release_ready else 'FAIL'}</span></td>"
+            f"<td>{escape(run.suite_name)}</td>"
+            f"<td><code>{run.run_id}</code></td>"
+            f"<td>{escape(run.created_at)}</td>"
+            f'<td><a href="/api/v1/reports/{run.run_id}">report</a></td>'
+            "</tr>"
+        )
+        for run in runs
+    )
+    if not rows:
+        rows = '<tr><td colspan="5">No persisted runs yet.</td></tr>'
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EvalForge run dashboard</title>
+  <style>
+    body {{ font: 16px/1.5 system-ui, sans-serif; margin: 2rem; color: #172033; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ border-bottom: 1px solid #d8deea; padding: .65rem; text-align: left; }}
+    code {{ font-size: .8rem; overflow-wrap: anywhere; }}
+    .status {{ font-weight: 700; }} .pass {{ color: #087a3e; }} .fail {{ color: #b42318; }}
+  </style>
+</head>
+<body>
+  <h1>EvalForge run dashboard</h1>
+  <p>Latest persisted release-gate outcomes. Candidate text is not rendered.</p>
+  <table>
+    <thead>
+      <tr><th>Gate</th><th>Suite</th><th>Run ID</th><th>Created</th><th>Evidence</th></tr>
+    </thead>
+    <tbody>{rows}</tbody>
+  </table>
+</body>
+</html>
+"""
+
+
 def create_app(database_path: Path) -> FastAPI:
     """Create an isolated EvalForge API backed by local SQLite storage."""
 
@@ -203,6 +248,18 @@ def create_app(database_path: Path) -> FastAPI:
     @app.get("/api/v1/health", response_model=HealthResponse, tags=["health"])
     def health() -> HealthResponse:
         return HealthResponse(storage_schema_version=registry.diagnostics().schema_version)
+
+    @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+    def dashboard() -> HTMLResponse:
+        response = HTMLResponse(_dashboard_html(service.list_runs(limit=100, offset=0)))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'none'"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.post(
         "/api/v1/suites",

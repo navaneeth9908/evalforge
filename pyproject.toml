@@ -15,10 +15,12 @@ dependencies = [
   "fastapi>=0.116,<1",
   "pydantic>=2.11,<3",
   "typer>=0.16,<1",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.scripts]
 evalforge = "evalforge.cli:app"
+evalforge-smoke = "evalforge.deployment_smoke:main"
 
 [dependency-groups]
 dev = [

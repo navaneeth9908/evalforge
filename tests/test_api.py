@@ -167,3 +167,40 @@ def test_request_validation_error_does_not_echo_rejected_values(tmp_path: Path) 
         "error": {"code": "validation_error", "message": "request validation failed"}
     }
     assert "customer-secret-name" not in response.text
+
+
+def test_dashboard_summarizes_persisted_runs_without_exposing_candidate_text(
+    tmp_path: Path,
+) -> None:
+    from evalforge.api import create_app
+
+    suite_payload = _suite('dashboard-</td><script>alert("x")</script>')
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        suite = client.post("/api/v1/suites", json=suite_payload).json()
+        evaluation = client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_id": suite["suite_id"],
+                "candidate_outputs": {"policy": "private-candidate-value"},
+            },
+        ).json()
+        dashboard = client.get("/dashboard")
+
+    assert dashboard.status_code == 200
+    assert dashboard.headers["content-type"].startswith("text/html")
+    assert "EvalForge run dashboard" in dashboard.text
+    assert (
+        "dashboard-&lt;/td&gt;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in dashboard.text
+    )
+    assert "</td><script>" not in dashboard.text
+    assert evaluation["run_id"] in dashboard.text
+    assert f"/api/v1/reports/{evaluation['run_id']}" in dashboard.text
+    assert "FAIL" in dashboard.text
+    assert "private-candidate-value" not in dashboard.text
+    assert dashboard.headers["cache-control"] == "no-store"
+    assert dashboard.headers["content-security-policy"] == (
+        "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    assert dashboard.headers["x-content-type-options"] == "nosniff"
+    assert dashboard.headers["referrer-policy"] == "no-referrer"

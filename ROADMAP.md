@@ -1,56 +1,85 @@
-# EvalForge Roadmap
+# EvalForge roadmap
 
-EvalForge is being built as a production-oriented evaluation and release-gating platform for LLM and AI-agent systems. Each completed capability must include tests, documentation, and reproducible evidence.
+EvalForge is a deterministic, vendor-neutral evaluation and release-gating toolkit for LLM and agent systems. This roadmap separates the verified `v0.1.0` release contract from later control-plane ambitions. Checked items have implementation and automated evidence; unchecked items are not release claims.
 
-## Foundation
+## Product principles
 
-- [x] Versioned deterministic suite contract
-- [x] Normalized exact-match evaluator
-- [x] Case-level evidence and pass-rate release gate
-- [x] Offline CLI with JSON reports and meaningful exit status
-- [x] Dataset provenance and content-addressed fingerprints
-- [x] Metric registry with exact, contains, and bounded regular-expression checks
-- [x] Declarative metric and threshold policies
-- [x] Baseline-versus-candidate regression analysis
-- [x] Deterministic two-variant model matrix and ablation summaries
+- Deterministic offline evaluation is the default.
+- Networked generation is an explicit adapter boundary.
+- Missing or ambiguous evidence fails closed.
+- Content-addressed provenance binds decisions without treating hashes as confidentiality.
+- Reports are automation-friendly and privacy-conscious.
+- Human judgment is supported, not disguised as mathematical certainty.
 
-## Evaluation depth
+## v0.1.0 release scope
 
-- [x] Weighted cases and severity-aware release decisions
-- [x] Latency and cost budgets
-- [ ] Token budgets
-- [x] Repeated-run stability and variance analysis
-- [x] Tool-call trace contract and argument/result validation
-- [x] Agent-trajectory ordering and state-transition checks
-- [x] Retrieval citation, grounding, and attribution metrics
-- [ ] Prompt-injection and policy-adherence suites
-- [x] PII and secret-leakage detectors
+### M0 — contracts and CI
 
-## Model and human judgment
+- [x] Typed, strict, versioned suite and policy contracts
+- [x] Locked `uv` environment, branch-covered tests, Ruff, strict Mypy, and package build
+- [x] Immutable GitHub Action pins with least-privilege workflow permissions
+- [x] JUnit and SARIF release evidence
 
-- [x] Provider-neutral candidate adapter contract with deterministic fakes
-- [x] OpenAI-compatible candidate adapter with bounded deadlines, retries, response limits, redaction, and attempt evidence
-- [x] Structured rubric and model-based judge with schema-constrained responses, injection-resistant framing, and deterministic fake coverage
-- [x] Repeated blinded judge calibration with agreement/drift gates and order, position, and verbosity-bias diagnostics
-- [x] Human-review queue with privacy-aware portable decisions and adjudication summaries
+### M1 — deterministic offline evaluation
 
-## Platform
+- [x] Exact, contains, and bounded regex metrics
+- [x] Case, metric, suite, severity, category, and tag policy dimensions
+- [x] Weighted pass rates and fail-closed release decisions
+- [x] Canonical input digests, deterministic run IDs, and dataset lineage
 
-- [x] SQLite run registry and reproducible run manifests
-- [x] FastAPI endpoints for suites, runs, and reports
-- [ ] Bounded asynchronous execution
-- [ ] OpenTelemetry traces and evaluation metrics
-- [ ] Analyst dashboard for runs, regressions, and evidence
+### M2 — regression and reliability
 
-## Delivery and governance
+- [x] Baseline-versus-candidate comparison gates
+- [x] Weighted slices and model/ablation summaries
+- [x] Integer-safe latency and cost budgets
+- [x] Repeated-run variance and flaky-case evidence
 
-- [x] GitHub Actions and JUnit release-gate output
-- [x] SARIF safety findings
-- [ ] Dataset versioning and artifact-integrity verification
-- [ ] Multi-candidate matrix and higher-order ablation comparisons
-- [ ] Container image, health checks, and deployment guide
-- [ ] Threat model, end-to-end demo, acceptance suite, and release documentation
+### M3 — agentic and safety evaluation
 
-## Definition of done
+- [x] Typed tool-call matching with redacted value digests
+- [x] Ordered trajectory and termination checks
+- [x] Citation and lexical grounding evidence
+- [x] Sensitive-data leakage scanning with redacted findings
+- [x] Structured rubric judging, calibration, and portable human review
 
-A capability is complete only when its behavior is tested, local quality gates pass, public documentation matches implementation, generated artifacts are excluded from version control, the exact staged snapshot receives independent review, and GitHub Actions passes after publication.
+### M4 — local operations and release hardening
+
+- [x] Transactional SQLite suite/run registry
+- [x] Versioned FastAPI suite, evaluation, run, report, and health routes
+- [x] Basic read-only local run dashboard
+- [x] Non-root container, loopback Compose default, and deployment smoke
+- [x] Credential-free end-to-end demo spanning fake generation, metrics, persistence, API, dashboard, JUnit, and SARIF
+- [x] Threat model, contributor workflow, extension guide, changelog, acceptance matrix, and automated link checks
+
+The exact command and test mapping are in [docs/acceptance.md](docs/acceptance.md).
+
+## Post-v0.1.0 roadmap
+
+These are intentionally open and are not prerequisites that the `v0.1.0` release pretends to satisfy.
+
+### M5 — richer evaluation catalog
+
+- [ ] Semantic-similarity and embedding metrics with governed model/version provenance
+- [ ] Task-specific code, retrieval, and structured-output evaluators beyond current contracts
+- [ ] Dataset mutation and adversarial test-case generation
+- [ ] Cross-dataset scorecards and long-horizon trend analysis
+
+### M6 — production control plane
+
+- [ ] Authentication, authorization, and tenant isolation
+- [ ] Full analyst dashboard for run comparison, regressions, slices, evidence, and trend drill-down
+- [ ] Hosted API workers, queues, retries, and distributed execution
+- [ ] Postgres/object-storage adapters and retention controls
+- [ ] OpenTelemetry traces and service-level operational metrics
+- [ ] Signed release artifacts, SBOM publication, and provenance attestations
+
+### M7 — governance and team workflows
+
+- [ ] Role-based policy approvals and change history
+- [ ] Reviewer identity federation and adjudication UI
+- [ ] Organization-level reusable policy packs
+- [ ] Scheduled production sampling with explicit privacy and consent controls
+
+## Release completion policy
+
+A green aggregate score alone does not close a roadmap item. Completion requires implementation, adversarial tests, public-contract documentation, and successful release gates on the exact commit. Environment-dependent checks such as a local Docker runtime are reported separately when unavailable. Release tags are created only after `main` is pushed, attribution is verified, and GitHub Actions is green.

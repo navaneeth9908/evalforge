@@ -43,6 +43,33 @@ jobs:
       - name: Build package
         run: uv build
 
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build container image
+        run: docker build --tag evalforge:ci .
+
+      - name: Verify container health and evaluation smoke
+        shell: bash
+        run: |
+          container_id="$(docker run --detach --rm --publish 127.0.0.1:8000:8000 --name evalforge-ci evalforge:ci)"
+          trap 'docker logs evalforge-ci || true; docker rm -f evalforge-ci || true' EXIT
+          for attempt in {1..30}; do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+          docker exec evalforge-ci \
+            evalforge-smoke --base-url http://127.0.0.1:8000 --timeout-seconds 5
+
   reporting:
     if: github.event_name == 'push'
     uses: ./.github/workflows/evalforge-reports.yml

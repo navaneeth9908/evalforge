@@ -1,0 +1,25 @@
+services:
+  evalforge:
+    build:
+      context: .
+    image: evalforge:local
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      EVALFORGE_DATABASE_PATH: /var/lib/evalforge/evalforge.db
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    volumes:
+      - evalforge-data:/var/lib/evalforge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 512m
+    restart: unless-stopped
+
+volumes:
+  evalforge-data:

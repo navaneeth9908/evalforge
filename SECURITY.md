@@ -1,23 +1,44 @@
-# Security Policy
+# Security policy
 
-## Supported version
+## Supported versions
 
-EvalForge is under active development. Security fixes are applied to the latest commit on `main`.
+| Version | Security updates |
+|---|---|
+| 0.1.x | Yes |
+| Earlier development snapshots | No |
+
+Until a newer line is released, fixes are applied to the latest `0.1.x` release and `main`.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for suspected vulnerabilities. Use GitHub's private vulnerability-reporting feature for this repository when available, or contact the maintainer through the address in `pyproject.toml`.
+Please do not open a public GitHub issue for a suspected vulnerability. Use GitHub's private vulnerability reporting for this repository, or contact the maintainer at `navaneeththota410@gmail.com` with the subject `EvalForge security report` if private reporting is unavailable.
 
-Include the affected version, reproduction steps, impact, and any suggested mitigation. Do not include real credentials, production prompts, customer records, or proprietary evaluation datasets.
+Include, when safe:
 
-## Trust boundaries
+- the affected version or commit;
+- the deployment model and required configuration;
+- minimal reproduction steps;
+- the expected and observed security impact; and
+- whether credentials, private data, or public infrastructure may already be exposed.
 
-- Suite, output, report, sensitive-data-policy, repeated-observation, stability-policy, comparison-policy, grounding-evaluation, tool-trace, trajectory, and dataset-manifest files are untrusted input and must pass duplicate-key, strict schema, Unicode, finite-number, numeric-literal-length, size, nesting, node-count, and string-length validation. Release, stability, regression, and sensitive-data thresholds reject ambiguous or coercive controls; grounding claims require strict integer spans with complete answer coverage.
-- User-controlled regular expressions use a constrained, length-limited syntax without repetition, grouping, alternation, or optional operators so matching work remains bounded by the input limits.
-- Dataset manifests are metadata, not proof that a source is trustworthy or appropriately licensed; operators must verify claimed lineage.
-- Evaluation and comparison reports can contain prompts, baseline and candidate model outputs, labels, dataset identifiers, and licenses; stability reports contain run labels and aggregate/per-case outcomes. Grounding reports omit answer, claim, retrieved-document content, and answer spans, but retain caller-supplied document and claim IDs plus a canonical input digest; protect identifiers and reports when they are sensitive or low entropy. Treat all reports as potentially sensitive artifacts. Full manifest source, revision, creator, and transformation lineage is deliberately excluded from reports.
-- Sensitive-data findings retain only a zero-based scanned-string index, category, and severity. They never copy matched values, output IDs, JSON keys, or source text. Input and policy digests remain guessable for low-entropy data, so scan reports are not a confidentiality boundary.
-- Detector categories and severity gates are fixed and bounded. Exact-match false-positive exceptions are configured as SHA-256 digests rather than plaintext; operators must restrict policy changes because allowlisting or disabling a category can suppress a release blocker.
-- Provider credentials must come from runtime environment variables or an external secret manager.
-- Offline deterministic evaluation requires no API keys or outbound network access.
-- Future model-based judges and tool adapters must document network, data-retention, and prompt-injection boundaries before release.
+Do not include live credentials, customer data, or destructive proof-of-concept payloads. You should receive an acknowledgement within seven days. The maintainer will validate scope, coordinate a fix and disclosure timeline, and credit reporters who request attribution.
+
+## Security model
+
+Read the [threat model](docs/threat-model.md) for assets, actors, data flows, trust boundaries, controls, and residual risks. In particular:
+
+- EvalForge v0.1.0 is designed for a trusted local operator or private CI runner.
+- The API and dashboard have no built-in authentication, authorization, tenant isolation, or TLS.
+- The Compose example binds to `127.0.0.1`; do not change that for an untrusted network without an authenticated reverse proxy, TLS, request limits, and deployment-specific authorization.
+- SQLite files, reports, JUnit, SARIF, prompts, and candidate output can contain sensitive business evidence. Protect them with operating-system and CI artifact permissions.
+- Provider output and user-authored policies are untrusted input. Deterministic scans reduce risk but do not prove safety.
+
+## Secrets and privacy
+
+Provider credentials must be supplied only through environment variables. Never commit `.env` files, authorization headers, private keys, real customer prompts, candidate outputs, or raw sensitive-data matches. EvalForge intentionally emits category and location metadata instead of matched secrets in leakage reports.
+
+If exposure is suspected, revoke the credential first, preserve only redacted evidence, and then report the incident privately.
+
+## Dependency and release security
+
+Release candidates require a frozen lockfile, test/lint/type/build gates, installed-wheel and synthetic acceptance smokes, staged secret/artifact review, independent code review, and green GitHub Actions on the exact commit. GitHub Actions are pinned to immutable commit SHAs and use least-privilege permissions.
