@@ -4,7 +4,13 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- Governed precomputed-embedding evaluation with cosine similarity, Euclidean distance, immutable model provenance approval, content-redacted vector digests, and deterministic CLI evidence.
+
+### Security
+
+- Raised the development pytest floor to a release without the current `PYSEC-2026-1845` advisory.
 
 ## [0.1.0] - 2026-09-27
 

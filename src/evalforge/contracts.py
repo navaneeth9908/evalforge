@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Annotated, Literal, Self, cast
 
@@ -15,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from evalforge.provenance import JsonValue, canonical_json_bytes
+from evalforge.provenance import JsonValue, canonical_json_bytes, canonical_json_sha256
 
 NonEmptyText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
@@ -1445,3 +1446,233 @@ class RubricJudgeReport(BaseModel):
     aggregate_threshold_passed: bool
     release_ready: bool
     summary: JudgeRationale
+
+
+EmbeddingCoordinate = Annotated[float, Field(ge=-1_000_000.0, le=1_000_000.0, allow_inf_nan=False)]
+EmbeddingModelIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=512,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._/-]*$",
+    ),
+]
+
+
+def _require_embedding_vector(value: object) -> object:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("embedding must be an array")
+    if not 1 <= len(value) <= 8192:
+        raise ValueError("embedding dimensions must be between 1 and 8192")
+    if any(type(coordinate) not in (int, float) for coordinate in value):
+        raise ValueError("embedding coordinates must be JSON numbers")
+    if any(not math.isfinite(coordinate) for coordinate in value):
+        raise ValueError("embedding coordinates must be finite")
+    return value
+
+
+class EmbeddingModelProvenance(BaseModel):
+    """Immutable identity and licensing evidence for one embedding model artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1]
+    provider: DatasetIdentifier
+    model_id: EmbeddingModelIdentifier
+    revision: NonEmptyText
+    dimensions: int = Field(ge=1, le=8192, strict=True)
+    artifact_sha256: Sha256Digest
+    license: NonEmptyText
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+
+class EmbeddingSimilarityCase(BaseModel):
+    """One reference/candidate embedding pair evaluated without retaining raw vectors."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    case_id: CaseIdentifier
+    reference_embedding: tuple[EmbeddingCoordinate, ...]
+    candidate_embedding: tuple[EmbeddingCoordinate, ...]
+
+    _validate_reference = field_validator("reference_embedding", mode="before")(
+        _require_embedding_vector
+    )
+    _validate_candidate = field_validator("candidate_embedding", mode="before")(
+        _require_embedding_vector
+    )
+
+    @model_validator(mode="after")
+    def require_compatible_nonzero_vectors(self) -> Self:
+        if len(self.reference_embedding) != len(self.candidate_embedding):
+            raise ValueError("reference and candidate embeddings must have equal dimensions")
+        if not any(coordinate != 0.0 for coordinate in self.reference_embedding):
+            raise ValueError("reference embedding must be nonzero")
+        if not any(coordinate != 0.0 for coordinate in self.candidate_embedding):
+            raise ValueError("candidate embedding must be nonzero")
+        return self
+
+
+class EmbeddingEvaluation(BaseModel):
+    """Versioned embedding pairs produced by one governed model artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    model: EmbeddingModelProvenance
+    cases: tuple[EmbeddingSimilarityCase, ...] = Field(min_length=1, max_length=10000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_model_dimensions_and_unique_cases(self) -> Self:
+        if len({case.case_id for case in self.cases}) != len(self.cases):
+            raise ValueError("embedding case IDs must be unique")
+        if any(len(case.reference_embedding) != self.model.dimensions for case in self.cases):
+            raise ValueError("embedding dimensions must match model provenance")
+        return self
+
+
+class EmbeddingPolicy(BaseModel):
+    """Fail-closed approval and quality thresholds for semantic similarity."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    approved_model_sha256: Sha256Digest
+    minimum_cosine_similarity: float = Field(ge=-1.0, le=1.0, allow_inf_nan=False)
+    minimum_pass_rate: ScoreThreshold
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("minimum_cosine_similarity", "minimum_pass_rate", mode="before")
+    @classmethod
+    def require_numeric_thresholds(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+
+class EmbeddingSimilarityResult(BaseModel):
+    """Content-redacted semantic and geometric metrics for one embedding pair."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    case_id: CaseIdentifier
+    cosine_similarity: float = Field(ge=-1.0, le=1.0, allow_inf_nan=False)
+    euclidean_distance: float = Field(ge=0.0, allow_inf_nan=False)
+    passed: bool = Field(strict=True)
+    reference_embedding_sha256: Sha256Digest
+    candidate_embedding_sha256: Sha256Digest
+
+    @field_validator("cosine_similarity", "euclidean_distance", mode="before")
+    @classmethod
+    def require_numeric_metrics(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+
+class EmbeddingGateFailure(BaseModel):
+    """Machine-readable reason a governed embedding release gate failed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    code: Literal["minimum_pass_rate_not_met"]
+    observed: ScoreThreshold
+    required: ScoreThreshold
+
+    @field_validator("observed", "required", mode="before")
+    @classmethod
+    def require_numeric_thresholds(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+
+class EmbeddingSimilarityReport(BaseModel):
+    """Versioned governed semantic-similarity release evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    model: EmbeddingModelProvenance
+    model_provenance_sha256: Sha256Digest
+    minimum_cosine_similarity: float = Field(ge=-1.0, le=1.0, allow_inf_nan=False)
+    minimum_pass_rate: ScoreThreshold
+    total_cases: int = Field(ge=1, strict=True)
+    passed_cases: int = Field(ge=0, strict=True)
+    pass_rate: ScoreThreshold
+    results: tuple[EmbeddingSimilarityResult, ...]
+    gate_failures: tuple[EmbeddingGateFailure, ...] = ()
+    release_ready: bool = Field(strict=True)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("minimum_cosine_similarity", "minimum_pass_rate", "pass_rate", mode="before")
+    @classmethod
+    def require_numeric_thresholds(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+    @model_validator(mode="after")
+    def require_consistent_release_evidence(self) -> Self:
+        if self.total_cases != len(self.results):
+            raise ValueError("total_cases must equal the number of results")
+        if len({result.case_id for result in self.results}) != len(self.results):
+            raise ValueError("embedding result case IDs must be unique")
+        if any(
+            result.passed != (result.cosine_similarity >= self.minimum_cosine_similarity)
+            for result in self.results
+        ):
+            raise ValueError("case decisions must match reported cosine evidence")
+
+        passed_cases = sum(result.passed for result in self.results)
+        if self.passed_cases != passed_cases:
+            raise ValueError("passed_cases must equal the number of passing results")
+        expected_pass_rate = passed_cases / self.total_cases
+        if self.pass_rate != expected_pass_rate:
+            raise ValueError("pass_rate must equal passed_cases divided by total_cases")
+
+        provenance_sha256 = canonical_json_sha256(
+            cast(JsonValue, self.model.model_dump(mode="json"))
+        )
+        if self.model_provenance_sha256 != provenance_sha256:
+            raise ValueError("model_provenance_sha256 must match model provenance")
+
+        gate_failed = self.pass_rate < self.minimum_pass_rate
+        if gate_failed:
+            if len(self.gate_failures) != 1:
+                raise ValueError("a failed pass-rate gate requires exactly one failure")
+            failure = self.gate_failures[0]
+            if failure.observed != self.pass_rate or failure.required != self.minimum_pass_rate:
+                raise ValueError("gate failure evidence must match report thresholds")
+        elif self.gate_failures:
+            raise ValueError("passing reports must not contain gate failures")
+
+        if self.release_ready != (not gate_failed):
+            raise ValueError("release_ready must match the pass-rate gate decision")
+        return self

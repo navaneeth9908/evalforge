@@ -106,7 +106,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "Authentication and multi-tenancy | Not implemented" in acceptance
     assert "Full regression analytics dashboard | Not implemented" in acceptance
     assert "M4 local operations and release hardening | Complete" in acceptance
-    assert "M5 richer evaluation catalog | Post-v0.1.0" in acceptance
+    assert "M5 governed semantic similarity and embedding metrics | Complete" in acceptance
+    assert "Remaining M5 evaluator catalog, mutations, and scorecards | In progress" in acceptance
 
     deployment = (ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
     assert "--factory evalforge.server:create_app_from_environment" in deployment

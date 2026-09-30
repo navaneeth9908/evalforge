@@ -19,6 +19,8 @@ from evalforge.contracts import (
     CandidateOutput,
     ComparisonPolicy,
     DatasetManifest,
+    EmbeddingEvaluation,
+    EmbeddingPolicy,
     EvaluationSuite,
     GroundingEvaluation,
     RepeatedObservations,
@@ -28,6 +30,10 @@ from evalforge.contracts import (
     TrajectoryPolicy,
 )
 from evalforge.demo import run_synthetic_demo
+from evalforge.embedding_similarity import (
+    EMBEDDING_SEMANTICS_VERSION,
+    evaluate_embedding_similarity,
+)
 from evalforge.engine import evaluate_suite
 from evalforge.grounding import GROUNDING_SEMANTICS_VERSION, evaluate_grounding
 from evalforge.leakage import (
@@ -87,6 +93,9 @@ def _bounded_json_float(raw_value: str) -> float:
     value = float(raw_value)
     if not isfinite(value):
         raise _UnsafeJsonError("JSON number must be finite")
+    significand = raw_value.lower().partition("e")[0]
+    if value == 0.0 and any(digit in significand for digit in "123456789"):
+        raise _UnsafeJsonError("JSON number underflows binary64")
     return value
 
 
@@ -139,24 +148,27 @@ def _read_json(path: Path, *, label: str) -> object:
         json.JSONDecodeError,
         _DuplicateJsonKeyError,
         _UnsafeJsonError,
-    ) as exc:
-        messages = {
-            "outputs": "outputs file is not valid JSON or is ambiguous",
-            "suite": "suite file is invalid or ambiguous",
-            "manifest": "dataset manifest is invalid or ambiguous",
-            "comparison_policy": "comparison policy is invalid or ambiguous",
-            "observations": "stability observations are invalid or ambiguous",
-            "stability_policy": "stability policy is invalid or ambiguous",
-            "tool_trace_expectation": "tool-trace expectation is invalid or ambiguous",
-            "tool_trace": "tool trace is invalid or ambiguous",
-            "trajectory_policy": "trajectory policy is invalid or ambiguous",
-            "trajectory": "trajectory is invalid or ambiguous",
-            "grounding": "grounding input is invalid or ambiguous",
-            "leakage_policy": "sensitive-data policy is invalid or ambiguous",
-            "report": "report input is invalid or ambiguous",
-        }
-        message = messages[label]
-        raise typer.BadParameter(message) from exc
+    ):
+        pass
+
+    messages = {
+        "outputs": "outputs file is not valid JSON or is ambiguous",
+        "suite": "suite file is invalid or ambiguous",
+        "manifest": "dataset manifest is invalid or ambiguous",
+        "comparison_policy": "comparison policy is invalid or ambiguous",
+        "observations": "stability observations are invalid or ambiguous",
+        "stability_policy": "stability policy is invalid or ambiguous",
+        "tool_trace_expectation": "tool-trace expectation is invalid or ambiguous",
+        "tool_trace": "tool trace is invalid or ambiguous",
+        "trajectory_policy": "trajectory policy is invalid or ambiguous",
+        "trajectory": "trajectory is invalid or ambiguous",
+        "grounding": "grounding input is invalid or ambiguous",
+        "embedding_evaluation": "embedding evaluation is invalid or ambiguous",
+        "embedding_policy": "embedding policy is invalid or ambiguous",
+        "leakage_policy": "sensitive-data policy is invalid or ambiguous",
+        "report": "report input is invalid or ambiguous",
+    }
+    raise typer.BadParameter(messages[label])
 
 
 def _parse_candidate_outputs(raw_outputs: object) -> dict[str, str | CandidateOutput]:
@@ -428,6 +440,75 @@ def grounding_command(
     typer.echo(f"Lexical grounding: {report.metrics.lexical_grounding:.2%}")
     typer.echo(f"Grounding gate: {'PASS' if report.release_ready else 'FAIL'}")
     if not report.release_ready:
+        raise typer.Exit(code=1)
+
+
+def _write_embedding_similarity_report(
+    evaluation_path: Path,
+    policy_path: Path,
+    report_path: Path,
+) -> tuple[float, bool] | str:
+    try:
+        raw_evaluation = _read_json(evaluation_path, label="embedding_evaluation")
+    except typer.BadParameter:
+        return "embedding evaluation is invalid or ambiguous"
+    try:
+        raw_policy = _read_json(policy_path, label="embedding_policy")
+    except typer.BadParameter:
+        return "embedding policy is invalid or ambiguous"
+    try:
+        evaluation = EmbeddingEvaluation.model_validate(raw_evaluation)
+        policy = EmbeddingPolicy.model_validate(raw_policy)
+    except ValidationError:
+        return "embedding input is invalid or ambiguous"
+    try:
+        report = evaluate_embedding_similarity(evaluation, policy)
+    except ValueError:
+        return "embedding input is invalid or ambiguous"
+
+    evaluation_sha256 = canonical_json_sha256(cast(JsonValue, raw_evaluation))
+    policy_sha256 = canonical_json_sha256(cast(JsonValue, raw_policy))
+    embedding_evaluation_id = canonical_json_sha256(
+        {
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "embedding_evaluation_id_schema_version": 1,
+            "embedding_semantics_version": EMBEDDING_SEMANTICS_VERSION,
+            "evaluation_sha256": evaluation_sha256,
+            "policy_sha256": policy_sha256,
+        }
+    )
+    payload = {
+        **report.model_dump(mode="json"),
+        "evaluation_sha256": evaluation_sha256,
+        "policy_sha256": policy_sha256,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "embedding_semantics_version": EMBEDDING_SEMANTICS_VERSION,
+        "embedding_evaluation_id": embedding_evaluation_id,
+    }
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+    except OSError:
+        return "embedding report could not be written"
+    return report.pass_rate, report.release_ready
+
+
+@app.command("embedding-similarity")
+def embedding_similarity_command(
+    evaluation_path: Path,
+    policy_path: Path,
+    report_path: Annotated[Path, typer.Option()] = Path("reports/embedding-similarity.json"),
+) -> None:
+    """Evaluate governed precomputed embeddings with deterministic similarity metrics."""
+    outcome = _write_embedding_similarity_report(evaluation_path, policy_path, report_path)
+    if isinstance(outcome, str):
+        raise typer.BadParameter(outcome)
+    pass_rate, release_ready = outcome
+
+    typer.echo(f"Embedding similarity report: {report_path}")
+    typer.echo(f"Embedding pass rate: {pass_rate:.2%}")
+    typer.echo(f"Embedding similarity gate: {'PASS' if release_ready else 'FAIL'}")
+    if not release_ready:
         raise typer.Exit(code=1)
 
 

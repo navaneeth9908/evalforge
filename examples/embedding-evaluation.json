@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "model": {
+    "schema_version": 1,
+    "provider": "evalforge",
+    "model_id": "synthetic-semantic-v1",
+    "revision": "fixture-1",
+    "dimensions": 3,
+    "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "license": "CC0-1.0"
+  },
+  "cases": [
+    {
+      "case_id": "refund-paraphrase",
+      "reference_embedding": [1.0, 0.0, 0.0],
+      "candidate_embedding": [0.8, 0.6, 0.0]
+    },
+    {
+      "case_id": "shipping-paraphrase",
+      "reference_embedding": [0.0, 1.0, 0.0],
+      "candidate_embedding": [0.0, 0.9, 0.1]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "approved_model_sha256": "9ffde40a4b34fac78ae46220008b047a9c99e113fad0f007adcf33c1c99cc50c",
+  "minimum_cosine_similarity": 0.75,
+  "minimum_pass_rate": 1.0
+}

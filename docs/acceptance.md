@@ -15,6 +15,7 @@ This page maps the release contract to executable evidence. A checked item means
 | JUnit and SARIF CI exports | `tests/test_ci_reporting.py` and synthetic demo artifact assertions | Verified |
 | Container entrypoint, health check, loopback Compose default | `tests/test_deployment.py`; local Docker smoke when an engine is available | Verified by contract tests; runtime is environment-dependent |
 | Documentation links and version consistency | `tests/test_documentation.py` | Verified |
+| Governed embedding similarity and provenance | `tests/test_embedding_similarity.py`, `tests/test_cli_embedding_similarity.py` | Verified |
 
 Run the complete credential-free tracer bullet:
 
@@ -35,7 +36,8 @@ The release includes the deterministic core and the implemented local operations
 | M2 regression, weighted slices, performance, and stability | Complete |
 | M3 agentic, grounding, leakage, and judge workflows | Complete |
 | M4 local operations and release hardening | Complete |
-| M5 richer evaluation catalog | Post-v0.1.0 |
+| M5 governed semantic similarity and embedding metrics | Complete |
+| Remaining M5 evaluator catalog, mutations, and scorecards | In progress |
 | Basic local run dashboard | Complete |
 | Full regression analytics dashboard | Not implemented |
 | Authentication and multi-tenancy | Not implemented |
