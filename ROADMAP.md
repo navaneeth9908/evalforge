@@ -60,7 +60,9 @@ These are intentionally open and are not prerequisites that the `v0.1.0` release
 ### M5 — richer evaluation catalog
 
 - [x] Semantic-similarity and embedding metrics with governed model/version provenance
-- [ ] Task-specific code, retrieval, and structured-output evaluators beyond current contracts
+- [x] Task-specific code evaluator over governed precomputed harness evidence
+- [ ] Retrieval evaluator
+- [ ] Structured-output evaluator beyond current contracts
 - [ ] Dataset mutation and adversarial test-case generation
 - [ ] Cross-dataset scorecards and long-horizon trend analysis
 

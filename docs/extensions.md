@@ -39,6 +39,12 @@ Metrics belong in the deterministic engine boundary, not in an HTTP adapter or d
 
 Never treat missing evidence as a pass. Resource measurements use strict non-negative JSON-safe integers. Aggregate overflow, partial evidence, NaN, infinity, and ambiguous duplicate keys must be rejected before a report is written.
 
+## Code harness integrations
+
+Keep untrusted candidate execution outside EvalForge. A code-harness adapter should run in a dedicated sandbox, bind the exact candidate artifact digest, identify immutable harness and runtime artifacts, and emit only bounded case IDs with terminal `passed`, `failed`, `error`, `timeout`, or `skipped` outcomes. Do not pass source, commands, paths, environment values, logs, or exception text into the evaluator. Policies must approve the complete normalized harness provenance, enumerate every required case in order, and represent pass-rate thresholds as bounded integer fractions. Missing or extra cases are invalid evidence; infrastructure outcomes block release independently of the pass-rate threshold.
+
+The current digest contract is identity evidence, not a signed attestation. Integrations that need cryptographic execution provenance should add a separately versioned signed-envelope boundary rather than implying that a plain SHA-256 field proves execution or sandbox strength.
+
 ## Versioned JSON contracts
 
 All persisted or exchanged suite, policy, trace, and report formats carry an integer `schema_version`. When extending one:

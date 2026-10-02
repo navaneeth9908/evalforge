@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+from contextlib import suppress
 from math import isfinite
 from pathlib import Path
 from typing import Annotated, cast
@@ -12,11 +14,14 @@ import typer
 from pydantic import ValidationError
 
 from evalforge.ci_reporting import evaluation_report_to_junit, sensitive_data_report_to_sarif
+from evalforge.code_evaluation import build_code_evaluation_artifact, evaluate_code_harness
 from evalforge.comparison import compare_evaluations
 from evalforge.contracts import (
     AgentToolTrace,
     AgentTrajectory,
     CandidateOutput,
+    CodeEvaluationPolicy,
+    CodeHarnessEvidence,
     ComparisonPolicy,
     DatasetManifest,
     EmbeddingEvaluation,
@@ -165,6 +170,8 @@ def _read_json(path: Path, *, label: str) -> object:
         "grounding": "grounding input is invalid or ambiguous",
         "embedding_evaluation": "embedding evaluation is invalid or ambiguous",
         "embedding_policy": "embedding policy is invalid or ambiguous",
+        "code_evidence": "code harness evidence is invalid or ambiguous",
+        "code_policy": "code harness policy is invalid or ambiguous",
         "leakage_policy": "sensitive-data policy is invalid or ambiguous",
         "report": "report input is invalid or ambiguous",
     }
@@ -508,6 +515,72 @@ def embedding_similarity_command(
     typer.echo(f"Embedding similarity report: {report_path}")
     typer.echo(f"Embedding pass rate: {pass_rate:.2%}")
     typer.echo(f"Embedding similarity gate: {'PASS' if release_ready else 'FAIL'}")
+    if not release_ready:
+        raise typer.Exit(code=1)
+
+
+def _write_code_harness_report(
+    evidence_path: Path,
+    policy_path: Path,
+    report_path: Path,
+) -> tuple[float, int, bool] | str:
+    try:
+        raw_evidence = _read_json(evidence_path, label="code_evidence")
+        raw_policy = _read_json(policy_path, label="code_policy")
+    except typer.BadParameter:
+        return "code harness input is invalid or ambiguous"
+    try:
+        evidence = CodeHarnessEvidence.model_validate(raw_evidence)
+        policy = CodeEvaluationPolicy.model_validate(raw_policy)
+        report = evaluate_code_harness(evidence, policy)
+        artifact = build_code_evaluation_artifact(
+            report,
+            evidence_sha256=canonical_json_sha256(cast(JsonValue, raw_evidence)),
+            policy_sha256=canonical_json_sha256(cast(JsonValue, raw_policy)),
+        )
+        serialized = f"{artifact.model_dump_json(indent=2)}\n"
+    except (ValidationError, ValueError):
+        return "code harness input is invalid or ambiguous"
+
+    temporary_path: Path | None = None
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{report_path.name}.",
+            suffix=".tmp",
+            dir=report_path.parent,
+            delete=False,
+        ) as destination:
+            temporary_path = Path(destination.name)
+            destination.write(serialized)
+        os.replace(temporary_path, report_path)
+    except OSError:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
+        return "code harness report could not be written"
+    return report.pass_rate, report.blocking_cases, report.release_ready
+
+
+@app.command("code-harness")
+def code_harness_command(
+    evidence_path: Path,
+    policy_path: Path,
+    report_path: Annotated[Path, typer.Option()] = Path("reports/code-harness.json"),
+) -> None:
+    """Evaluate precomputed harness evidence without executing candidate code."""
+    outcome = _write_code_harness_report(evidence_path, policy_path, report_path)
+    if isinstance(outcome, str):
+        raise typer.BadParameter(outcome)
+    pass_rate, blocking_cases, release_ready = outcome
+
+    typer.echo(f"Code harness report: {report_path}")
+    typer.echo(f"Code pass rate: {pass_rate:.2%}")
+    typer.echo(f"Blocking outcomes: {blocking_cases}")
+    typer.echo(f"Code harness gate: {'PASS' if release_ready else 'FAIL'}")
     if not release_ready:
         raise typer.Exit(code=1)
 

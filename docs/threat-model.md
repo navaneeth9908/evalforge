@@ -12,6 +12,7 @@ EvalForge v0.1.0 does **not** provide authentication, authorization, tenant isol
 - Prompts, expected answers, candidate outputs, traces, and rubric content
 - Dataset lineage and content-addressed evidence
 - Evaluation and safety reports used to approve or block a release
+- Candidate code artifacts and precomputed code-harness evidence
 - SQLite registry integrity and availability
 - CI check results, JUnit, and SARIF artifacts
 - The host filesystem and network reachable by the EvalForge process
@@ -36,6 +37,7 @@ flowchart LR
     E -->|report evidence| S[(SQLite registry)]
     S --> API[FastAPI and dashboard]
     E --> CI[JUnit and SARIF exports]
+    H[Trusted external code sandbox] -->|bounded outcome evidence| V
 ```
 
 1. **Caller to parser/API.** JSON, path arguments, suite definitions, regular expressions, traces, and output text are attacker-controlled. Limits and strict schemas must run before expensive work.
@@ -44,6 +46,7 @@ flowchart LR
 4. **Persistence to API/dashboard.** API clients can observe persisted metadata and reports. Dashboard fields require HTML escaping. Summary views deliberately omit candidate text.
 5. **Reports to CI and GitHub.** JUnit and SARIF become externally visible artifacts or annotations. They must contain bounded, redacted evidence rather than raw sensitive values.
 6. **Repository to CI/container.** Dependencies, Actions, build context, and generated files can affect release integrity. Locking, immutable Action references, minimal build context, and a non-root runtime reduce exposure.
+7. **External code harness to evaluator.** Candidate code is untrusted, but its sandbox and evidence producer are trusted. EvalForge validates provenance, exact case accounting, and terminal outcomes; it does not execute code or attest sandbox controls.
 
 ## Threats and controls
 
@@ -59,6 +62,7 @@ flowchart LR
 | Cross-site scripting in the dashboard | HTML escaping, no candidate text, restrictive Content Security Policy, `nosniff`, no-store | The dashboard has no authentication; reverse-proxy headers and origin policy are deployment responsibilities |
 | Unauthorized evaluation or report access | Loopback-only Compose default and documented private-use assumption | Authentication and authorization are absent from v0.1.0 |
 | False release approval | Fail-closed thresholds, exact evidence cardinality, strict integers, provenance digests, deterministic IDs, tests across gate failures | Deterministic metrics can be incomplete proxies for product quality; human review remains necessary |
+| Forged or incomplete code-test evidence | Approved producer/runtime provenance digest, exact ordered required-case accounting, blocking infrastructure outcomes, content-addressed candidate/evidence IDs | JSON evidence is not a signed execution attestation; producer compromise or weak sandboxing remains external |
 | Supply-chain or CI tampering | Locked Python dependencies, immutable Action commit SHAs, least-privilege workflow permissions, build/test gates | PyPI, GitHub, or a dependency could still be compromised; no artifact signing/SBOM in v0.1.0 |
 | Path traversal or accidental file disclosure | CLI writes to explicit operator paths; container uses a fixed application directory and non-root user | The trusted local operator can choose destructive or sensitive paths; API does not accept arbitrary output paths |
 
@@ -76,6 +80,7 @@ flowchart LR
 - **Authentication and multi-tenancy:** not implemented. The API is not an internet-facing multi-user service.
 - **Encryption at rest:** not implemented. Protect the database and artifacts with OS and CI permissions.
 - **Sandboxing model output:** EvalForge does not execute model text, but it cannot control downstream consumers.
+- **Candidate-code execution:** not implemented by design. A trusted external harness must isolate untrusted code with network, filesystem, process, CPU, memory, and wall-time controls.
 - **Perfect safety detection:** deterministic patterns and metrics are evidence, not proof of safety or correctness.
 - **High availability:** SQLite and a single process target local and small-team workflows.
 - **Artifact signing and SBOM:** planned hardening beyond v0.1.0.

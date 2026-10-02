@@ -32,6 +32,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Content-redacted RAG evidence that retains document and claim IDs only
 - Governed precomputed-embedding evaluation with cosine similarity and Euclidean distance
 - Exact model provider, revision, artifact digest, dimensionality, and license provenance approval
+- Task-specific code gates over approved precomputed harness and runtime provenance
+- Exact required-case accounting with redacted pass/fail/error/timeout/skipped evidence
 - Deterministic secret and PII detectors for email, phone, US SSN, payment-card, API-key, and private-key patterns
 - Digest allowlists, category controls, severity overrides, and configurable blocking severities
 - Redacted leakage findings for candidate outputs and nested evaluation-report values
@@ -110,6 +112,9 @@ uv run evalforge grounding examples/grounding.json \
 
 uv run evalforge embedding-similarity examples/embedding-evaluation.json \
   examples/embedding-policy.json --report-path reports/embedding-similarity.json
+
+uv run evalforge code-harness examples/code-harness-evidence.json \
+  examples/code-harness-policy.json --report-path reports/code-harness.json
 
 uv run evalforge scan-leakage examples/leakage-outputs.json \
   --policy examples/leakage-policy.json \
@@ -384,6 +389,10 @@ Embedding similarity uses a separate strict `schema_version: 1` evaluation and p
 
 The evaluator computes cosine similarity in `[-1, 1]` by first scaling each vector by its maximum absolute coordinate, then applying `math.hypot` normalization and `math.fsum`; only original vectors proven exactly proportional or antiparallel retain the `1.0` and `-1.0` endpoints, while rounded non-matches cannot be promoted to either endpoint. Euclidean distance uses `math.dist`. Each inclusive cosine gate is decided with an exact rational comparison over the original binary64 coordinates. If the bounded diagnostic cosine rounds across the configured threshold, the report moves it by at most one binary64 step onto the exact decision's side, so persisted `cosine_similarity` and `passed` remain self-consistent without changing the gate. These choices preserve direction for permitted subnormal vectors and strict gate decisions under semantics version `embedding-cosine-l2-v1-scaled-hypot-fsum-exact-decision-aligned`. The cosine threshold controls each case; the minimum pass rate controls the release verdict. Reports retain public model provenance, per-case metric values, and canonical vector digests, but omit raw vectors. Digests are integrity evidence, not confidentiality: low-entropy embeddings can be guessed, and embedding models can encode bias or sensitive attributes. Generate vectors in a controlled system, verify the artifact digest independently, and do not interpret similarity as factual equivalence.
 
+Task-specific code evaluation accepts only a strict `schema_version: 1` document of precomputed terminal test outcomes plus a separate policy. The policy approves the canonical digest of the complete harness and runtime provenance, declares the exact ordered required case IDs, names the task, and sets an inclusive minimum pass rate as JSON-safe integer `minimum_pass_rate_numerator` and `minimum_pass_rate_denominator` fields. Exact integer cross-multiplication decides the gate, avoiding binary floating-point aliases around rational thresholds. Missing, extra, duplicate, or reordered cases, invalid fractions, coercive integers, and unapproved provenance fail before artifact creation. `passed` is the only passing outcome; `error`, `timeout`, and `skipped` always block release even when the ratio threshold would otherwise pass. See [`examples/code-harness-evidence.json`](examples/code-harness-evidence.json) and [`examples/code-harness-policy.json`](examples/code-harness-policy.json).
+
+EvalForge does not execute candidate code. It does not accept source, commands, paths, environment values, standard output, standard error, or exception messages. The evidence producer and sandbox are trusted: operators must independently ensure that the harness executed the candidate identified by `candidate_artifact_sha256` with appropriate network, filesystem, process, CPU, memory, and wall-time controls. Candidate and provenance digests bind identity but do not prove execution, authenticity, confidentiality, or sandbox strength.
+
 Sensitive-data scanning uses fixed deterministic detectors for email addresses, North American phone numbers, structurally valid US Social Security numbers, Luhn-valid payment-card numbers, labeled or common-prefixed API keys, and PEM private-key material. `scan-leakage` scans candidate output text; `scan-report-leakage` recursively scans string values in an evaluation report. A strict `schema_version: 1` policy selects enabled categories, overrides category severities, and chooses which severities block release. False positives can be suppressed without storing plaintext in policy by listing exact lowercase SHA-256 digests in `allowlisted_value_sha256`; the digest must be computed from the detector's exact matched value. Findings contain only a zero-based string index, category, and severity—never the matched value, output ID, JSON key, or source text. See [`examples/leakage-policy.json`](examples/leakage-policy.json) and [`examples/leakage-outputs.json`](examples/leakage-outputs.json).
 
 These detectors are intentionally conservative pattern checks, not proof of identity or secret validity. Phone and email syntax can match public or fictional values, only US SSN structure is recognized, API-key formats evolve, and encoded or obfuscated values may be missed. Digest allowlists can be brute-forced for low-entropy values and must be reviewed as security configuration. Keep source inputs and generated scan reports in controlled artifact storage even though findings are redacted.
@@ -432,6 +441,11 @@ embedding_case_passed = exact_cosine(binary64_reference, binary64_candidate)
                         >= minimum_cosine_similarity
 embedding_ready = passed_embedding_cases / embedding_cases >= minimum_pass_rate
 
+code_case_passed = terminal_outcome == "passed"
+code_ready = passed_code_cases * minimum_pass_rate_denominator
+             >= minimum_pass_rate_numerator * required_code_cases
+             and no outcome is error, timeout, or skipped
+
 sensitive_data_ready = no finding severity appears in blocking_severities
 ```
 
@@ -448,6 +462,8 @@ Trajectory report schema version `1` emits deterministic transition and violatio
 Grounding report schema version `1` emits document-ID-only retrieval evidence, claim/document citation IDs, Boolean validity/support evidence, deterministic metrics, and ordered invalid-reference, unsupported-citation, and uncited-claim findings. The CLI binds a canonical input digest, canonicalization and grounding-semantics versions (including the runtime Unicode database used for lexical tokenization), and a deterministic `grounding_id`; raw answer, claim, document text, and answer spans are excluded. Identical inputs under the same reported grounding-semantics version serialize byte-for-byte identically. Malformed inputs write no report, a failed gate writes evidence and exits `1`, and a passing gate exits `0`.
 
 Embedding-similarity report schema version `1` emits approved model provenance, its canonical digest, cosine similarity, Euclidean distance, vector digests, thresholds, aggregate pass evidence, and ordered gate failures without raw vectors. The CLI binds canonical evaluation and policy digests plus canonicalization and embedding-semantics versions into `embedding_evaluation_id`. Malformed or unapproved inputs write no report; a failed quality gate writes evidence and exits `1`; a passing gate exits `0`.
+
+Code-harness report schema version `1` emits the approved producer/runtime provenance, candidate artifact digest, ordered terminal outcomes, exact threshold fraction, derived diagnostic pass rate, blocking-outcome count, and machine-readable gate failures. It excludes candidate code and runtime output. A canonical digest of the complete validated report joins the canonical evidence and policy digests plus fixed code-evaluation semantics in `code_evaluation_id`, so changing either inputs or derived evidence changes the identity. Invalid, incomplete, or unapproved evidence does not replace an existing report; report writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
 
 Sensitive-data report schema version `1` emits deterministic category/severity findings and a release verdict without matched values or caller-provided output IDs. Output and report scan commands bind canonical input and policy digests, canonicalization and Unicode-bound detector-semantics versions, and deterministic scan IDs. Invalid policies write no report; blocking findings write redacted evidence and exit `1`; clean or non-blocking findings exit `0`.
 

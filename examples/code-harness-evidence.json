@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "candidate_artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "harness": {
+    "schema_version": 1,
+    "producer": "evalforge-synthetic-harness",
+    "revision": "fixture-1",
+    "harness_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtime_artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "cases": [
+    {
+      "case_id": "public-add",
+      "outcome": "passed"
+    },
+    {
+      "case_id": "hidden-empty",
+      "outcome": "passed"
+    }
+  ]
+}

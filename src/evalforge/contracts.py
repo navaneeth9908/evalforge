@@ -1676,3 +1676,221 @@ class EmbeddingSimilarityReport(BaseModel):
         if self.release_ready != (not gate_failed):
             raise ValueError("release_ready must match the pass-rate gate decision")
         return self
+
+
+CodeHarnessOutcome = Literal["passed", "failed", "error", "timeout", "skipped"]
+
+
+class CodeHarnessProvenance(BaseModel):
+    """Immutable identity for the trusted producer of precomputed code-test evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1]
+    producer: DatasetIdentifier
+    revision: NonEmptyText
+    harness_artifact_sha256: Sha256Digest
+    runtime_artifact_sha256: Sha256Digest
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+
+class CodeCaseEvidence(BaseModel):
+    """One terminal outcome emitted by a trusted external code harness."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    case_id: CaseIdentifier
+    outcome: CodeHarnessOutcome
+
+
+class CodeHarnessEvidence(BaseModel):
+    """Bounded precomputed evidence; candidate code and runtime output are excluded."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1]
+    candidate_artifact_sha256: Sha256Digest
+    harness: CodeHarnessProvenance
+    cases: tuple[CodeCaseEvidence, ...] = Field(min_length=1, max_length=10000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_unique_case_ids(self) -> Self:
+        if len({case.case_id for case in self.cases}) != len(self.cases):
+            raise ValueError("code harness case IDs must be unique")
+        return self
+
+
+class CodeEvaluationPolicy(BaseModel):
+    """Task-specific harness approval, exact case set, and release threshold."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1]
+    task_id: DatasetIdentifier
+    approved_harness_sha256: Sha256Digest
+    required_case_ids: tuple[CaseIdentifier, ...] = Field(min_length=1, max_length=10000)
+    minimum_pass_rate_numerator: int = Field(ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True)
+    minimum_pass_rate_denominator: int = Field(ge=1, le=MAX_SAFE_JSON_INTEGER, strict=True)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_valid_threshold_and_unique_case_ids(self) -> Self:
+        if self.minimum_pass_rate_numerator > self.minimum_pass_rate_denominator:
+            raise ValueError("minimum pass-rate numerator must not exceed its denominator")
+        if len(set(self.required_case_ids)) != len(self.required_case_ids):
+            raise ValueError("required code case IDs must be unique")
+        return self
+
+
+class CodeCaseResult(BaseModel):
+    """Content-redacted release evidence for one required code-test case."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    case_id: CaseIdentifier
+    outcome: CodeHarnessOutcome
+    passed: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def require_outcome_decision(self) -> Self:
+        if self.passed != (self.outcome == "passed"):
+            raise ValueError("code case decision must match its terminal outcome")
+        return self
+
+
+class CodeGateFailure(BaseModel):
+    """Machine-readable reason task-specific code evidence blocks release."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    code: Literal["minimum_pass_rate_not_met", "blocking_outcomes_present"]
+    case_ids: tuple[CaseIdentifier, ...] = ()
+    observed_passed_cases: int | None = Field(default=None, ge=0, le=10000, strict=True)
+    observed_total_cases: int | None = Field(default=None, ge=1, le=10000, strict=True)
+    required_numerator: int | None = Field(
+        default=None, ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True
+    )
+    required_denominator: int | None = Field(
+        default=None, ge=1, le=MAX_SAFE_JSON_INTEGER, strict=True
+    )
+
+    @model_validator(mode="after")
+    def require_failure_shape(self) -> Self:
+        ratio_evidence = (
+            self.observed_passed_cases,
+            self.observed_total_cases,
+            self.required_numerator,
+            self.required_denominator,
+        )
+        if self.code == "minimum_pass_rate_not_met":
+            if self.case_ids or any(value is None for value in ratio_evidence):
+                raise ValueError("pass-rate failure must contain only exact ratio evidence")
+        elif not self.case_ids or any(value is not None for value in ratio_evidence):
+            raise ValueError("blocking-outcome failure must contain only affected case IDs")
+        return self
+
+
+class CodeEvaluationReport(BaseModel):
+    """Derived, redacted release evidence for one task-specific code candidate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1] = 1
+    task_id: DatasetIdentifier
+    candidate_artifact_sha256: Sha256Digest
+    harness: CodeHarnessProvenance
+    harness_provenance_sha256: Sha256Digest
+    minimum_pass_rate_numerator: int = Field(ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True)
+    minimum_pass_rate_denominator: int = Field(ge=1, le=MAX_SAFE_JSON_INTEGER, strict=True)
+    total_cases: int = Field(ge=1, le=10000, strict=True)
+    passed_cases: int = Field(ge=0, le=10000, strict=True)
+    blocking_cases: int = Field(ge=0, le=10000, strict=True)
+    pass_rate: ScoreThreshold
+    results: tuple[CodeCaseResult, ...]
+    gate_failures: tuple[CodeGateFailure, ...] = ()
+    release_ready: bool = Field(strict=True)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @field_validator("pass_rate", mode="before")
+    @classmethod
+    def require_numeric_thresholds(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+    @model_validator(mode="after")
+    def require_consistent_release_evidence(self) -> Self:
+        if self.total_cases != len(self.results):
+            raise ValueError("total_cases must equal the number of code results")
+        if len({result.case_id for result in self.results}) != len(self.results):
+            raise ValueError("code result case IDs must be unique")
+        passed_cases = sum(result.passed for result in self.results)
+        blocking_ids = tuple(
+            result.case_id
+            for result in self.results
+            if result.outcome in {"error", "timeout", "skipped"}
+        )
+        if self.passed_cases != passed_cases:
+            raise ValueError("passed_cases must equal the number of passing code results")
+        if self.blocking_cases != len(blocking_ids):
+            raise ValueError("blocking_cases must equal the number of blocking outcomes")
+        expected_pass_rate = passed_cases / self.total_cases
+        if self.pass_rate != expected_pass_rate:
+            raise ValueError("pass_rate must equal passed_cases divided by total_cases")
+        expected_provenance_sha256 = canonical_json_sha256(
+            cast(JsonValue, self.harness.model_dump(mode="json"))
+        )
+        if self.harness_provenance_sha256 != expected_provenance_sha256:
+            raise ValueError("harness_provenance_sha256 must match harness provenance")
+
+        if self.minimum_pass_rate_numerator > self.minimum_pass_rate_denominator:
+            raise ValueError("minimum pass-rate numerator must not exceed its denominator")
+
+        expected_failures: list[CodeGateFailure] = []
+        if (
+            passed_cases * self.minimum_pass_rate_denominator
+            < self.minimum_pass_rate_numerator * self.total_cases
+        ):
+            expected_failures.append(
+                CodeGateFailure(
+                    code="minimum_pass_rate_not_met",
+                    observed_passed_cases=passed_cases,
+                    observed_total_cases=self.total_cases,
+                    required_numerator=self.minimum_pass_rate_numerator,
+                    required_denominator=self.minimum_pass_rate_denominator,
+                )
+            )
+        if blocking_ids:
+            expected_failures.append(
+                CodeGateFailure(code="blocking_outcomes_present", case_ids=blocking_ids)
+            )
+        if self.gate_failures != tuple(expected_failures):
+            raise ValueError("code gate failures must match derived release evidence")
+        if self.release_ready != (not expected_failures):
+            raise ValueError("release_ready must match the derived code gate decision")
+        return self
