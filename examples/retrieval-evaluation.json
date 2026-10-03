@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "retriever": {
+    "schema_version": 1,
+    "producer": "evalforge-synthetic-retriever",
+    "revision": "fixture-1",
+    "retriever_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "corpus_artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "index_artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "cases": [
+    {
+      "case_id": "refund-policy",
+      "relevant_document_ids": [
+        "refund-v2"
+      ],
+      "retrieved_document_ids": [
+        "faq",
+        "refund-v2",
+        "privacy"
+      ]
+    },
+    {
+      "case_id": "shipping-policy",
+      "relevant_document_ids": [
+        "shipping-v3"
+      ],
+      "retrieved_document_ids": [
+        "shipping-v3",
+        "contact",
+        "returns"
+      ]
+    }
+  ]
+}

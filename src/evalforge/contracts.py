@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from fractions import Fraction
 from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
@@ -1893,4 +1894,321 @@ class CodeEvaluationReport(BaseModel):
             raise ValueError("code gate failures must match derived release evidence")
         if self.release_ready != (not expected_failures):
             raise ValueError("release_ready must match the derived code gate decision")
+        return self
+
+
+RetrievalDocumentIdentifier = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$",
+    ),
+]
+RetrievalMetricName = Literal["precision_at_k", "recall_at_k", "mrr_at_k"]
+ExactFractionInteger = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=1024, pattern=r"^(0|[1-9][0-9]*)$"),
+]
+
+
+class RationalThreshold(BaseModel):
+    """Canonical exact fraction in the closed unit interval."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    numerator: int = Field(ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True)
+    denominator: int = Field(ge=1, le=MAX_SAFE_JSON_INTEGER, strict=True)
+
+    @model_validator(mode="after")
+    def require_canonical_unit_fraction(self) -> Self:
+        if self.numerator > self.denominator:
+            raise ValueError("threshold numerator must not exceed its denominator")
+        reduced = Fraction(self.numerator, self.denominator)
+        if (reduced.numerator, reduced.denominator) != (self.numerator, self.denominator):
+            raise ValueError("threshold fraction must be in lowest terms")
+        return self
+
+
+class RetrieverProvenance(BaseModel):
+    """Immutable identity for one governed retriever, corpus, and index."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1]
+    producer: DatasetIdentifier
+    revision: NonEmptyText
+    retriever_artifact_sha256: Sha256Digest
+    corpus_artifact_sha256: Sha256Digest
+    index_artifact_sha256: Sha256Digest
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+
+class RetrievalCaseEvidence(BaseModel):
+    """One ranked retrieval result and its relevance judgments."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    case_id: CaseIdentifier
+    relevant_document_ids: tuple[RetrievalDocumentIdentifier, ...] = Field(
+        min_length=1, max_length=1000
+    )
+    retrieved_document_ids: tuple[RetrievalDocumentIdentifier, ...] = Field(
+        default=(), max_length=1000
+    )
+
+    @model_validator(mode="after")
+    def require_unique_document_ids(self) -> Self:
+        if len(set(self.relevant_document_ids)) != len(self.relevant_document_ids):
+            raise ValueError("relevant retrieval document IDs must be unique")
+        if len(set(self.retrieved_document_ids)) != len(self.retrieved_document_ids):
+            raise ValueError("retrieved document IDs must be unique")
+        return self
+
+
+class RetrievalEvaluation(BaseModel):
+    """Versioned ranked retrieval evidence from one governed retriever."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1]
+    retriever: RetrieverProvenance
+    cases: tuple[RetrievalCaseEvidence, ...] = Field(min_length=1, max_length=10000)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_unique_case_ids(self) -> Self:
+        if len({case.case_id for case in self.cases}) != len(self.cases):
+            raise ValueError("retrieval case IDs must be unique")
+        return self
+
+
+class RetrievalPolicy(BaseModel):
+    """Retriever approval, exact query accounting, cutoff, and exact metric gates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1]
+    task_id: DatasetIdentifier
+    approved_retriever_sha256: Sha256Digest
+    required_case_ids: tuple[CaseIdentifier, ...] = Field(min_length=1, max_length=10000)
+    cutoff_k: int = Field(ge=1, le=1000, strict=True)
+    minimum_precision_at_k: RationalThreshold
+    minimum_recall_at_k: RationalThreshold
+    minimum_mrr_at_k: RationalThreshold
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_unique_case_ids(self) -> Self:
+        if len(set(self.required_case_ids)) != len(self.required_case_ids):
+            raise ValueError("required retrieval case IDs must be unique")
+        return self
+
+
+class RetrievalCaseResult(BaseModel):
+    """Document-ID-free metrics for one ranked retrieval case."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    case_id: CaseIdentifier
+    relevant_document_count: int = Field(ge=1, le=1000, strict=True)
+    retrieved_document_count: int = Field(ge=0, le=1000, strict=True)
+    relevant_at_k: int = Field(ge=0, le=1000, strict=True)
+    first_relevant_rank: int | None = Field(default=None, ge=1, le=1000, strict=True)
+    precision_at_k: ScoreThreshold
+    recall_at_k: ScoreThreshold
+    reciprocal_rank_at_k: ScoreThreshold
+
+    @field_validator("precision_at_k", "recall_at_k", "reciprocal_rank_at_k", mode="before")
+    @classmethod
+    def require_numeric_metrics(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name
+        assert field_name is not None
+        return _require_json_number(value, field_name=field_name)
+
+
+class RetrievalMetricEvidence(BaseModel):
+    """Exact aggregate metric, threshold, and decision evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    metric: RetrievalMetricName
+    observed_numerator: ExactFractionInteger
+    observed_denominator: ExactFractionInteger
+    observed_value: ScoreThreshold
+    required_numerator: int = Field(ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True)
+    required_denominator: int = Field(ge=1, le=MAX_SAFE_JSON_INTEGER, strict=True)
+    passed: bool = Field(strict=True)
+
+    @field_validator("observed_value", mode="before")
+    @classmethod
+    def require_numeric_value(cls, value: object) -> object:
+        return _require_json_number(value, field_name="observed_value")
+
+    @model_validator(mode="after")
+    def require_exact_metric_decision(self) -> Self:
+        observed_numerator = int(self.observed_numerator)
+        observed_denominator = int(self.observed_denominator)
+        if observed_denominator == 0:
+            raise ValueError("observed retrieval denominator must be positive")
+        observed = Fraction(observed_numerator, observed_denominator)
+        required = Fraction(self.required_numerator, self.required_denominator)
+        if (str(observed.numerator), str(observed.denominator)) != (
+            self.observed_numerator,
+            self.observed_denominator,
+        ):
+            raise ValueError("observed retrieval fraction must be in lowest terms")
+        if (required.numerator, required.denominator) != (
+            self.required_numerator,
+            self.required_denominator,
+        ):
+            raise ValueError("required retrieval fraction must be in lowest terms")
+        if self.observed_value != float(observed):
+            raise ValueError("observed_value must match the exact retrieval fraction")
+        if self.passed != (observed >= required):
+            raise ValueError("retrieval metric decision must match exact fraction evidence")
+        return self
+
+
+class RetrievalGateFailure(BaseModel):
+    """Machine-readable exact evidence for one failed retrieval metric gate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    metric: RetrievalMetricName
+    observed_numerator: ExactFractionInteger
+    observed_denominator: ExactFractionInteger
+    required_numerator: int = Field(ge=0, le=MAX_SAFE_JSON_INTEGER, strict=True)
+    required_denominator: int = Field(ge=1, le=MAX_SAFE_JSON_INTEGER, strict=True)
+
+
+class RetrievalReport(BaseModel):
+    """Versioned redacted ranked-retrieval metrics and release decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
+
+    schema_version: Literal[1] = 1
+    task_id: DatasetIdentifier
+    retriever: RetrieverProvenance
+    retriever_provenance_sha256: Sha256Digest
+    required_case_ids: tuple[CaseIdentifier, ...]
+    cutoff_k: int = Field(ge=1, le=1000, strict=True)
+    total_cases: int = Field(ge=1, le=10000, strict=True)
+    results: tuple[RetrievalCaseResult, ...]
+    metrics: tuple[RetrievalMetricEvidence, RetrievalMetricEvidence, RetrievalMetricEvidence]
+    gate_failures: tuple[RetrievalGateFailure, ...] = ()
+    release_ready: bool = Field(strict=True)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_consistent_release_evidence(self) -> Self:
+        if self.total_cases != len(self.results):
+            raise ValueError("total_cases must equal the number of retrieval results")
+        result_ids = tuple(result.case_id for result in self.results)
+        if result_ids != self.required_case_ids:
+            raise ValueError("retrieval result IDs must exactly match required case order")
+        expected_provenance = canonical_json_sha256(
+            cast(JsonValue, self.retriever.model_dump(mode="json"))
+        )
+        if self.retriever_provenance_sha256 != expected_provenance:
+            raise ValueError("retriever_provenance_sha256 must match retriever provenance")
+
+        precision_values: list[Fraction] = []
+        recall_values: list[Fraction] = []
+        reciprocal_rank_values: list[Fraction] = []
+        for result in self.results:
+            if result.relevant_at_k > min(
+                result.relevant_document_count,
+                result.retrieved_document_count,
+                self.cutoff_k,
+            ):
+                raise ValueError("relevant_at_k exceeds the retrieved result count")
+            if result.first_relevant_rank is not None and (
+                result.first_relevant_rank > min(self.cutoff_k, result.retrieved_document_count)
+                or result.relevant_at_k == 0
+            ):
+                raise ValueError("first relevant rank must identify a hit within cutoff")
+            if result.first_relevant_rank is None and result.relevant_at_k != 0:
+                raise ValueError("retrieval hits require a first relevant rank")
+            if (
+                result.first_relevant_rank is not None
+                and result.first_relevant_rank + result.relevant_at_k - 1
+                > min(self.cutoff_k, result.retrieved_document_count)
+            ):
+                raise ValueError("first relevant rank leaves too few ranked positions for all hits")
+            precision = Fraction(result.relevant_at_k, self.cutoff_k)
+            recall = Fraction(result.relevant_at_k, result.relevant_document_count)
+            reciprocal_rank = (
+                Fraction(1, result.first_relevant_rank)
+                if result.first_relevant_rank is not None
+                else Fraction()
+            )
+            if (
+                result.precision_at_k != float(precision)
+                or result.recall_at_k != float(recall)
+                or result.reciprocal_rank_at_k != float(reciprocal_rank)
+            ):
+                raise ValueError("retrieval case metrics must match ranked count evidence")
+            precision_values.append(precision)
+            recall_values.append(recall)
+            reciprocal_rank_values.append(reciprocal_rank)
+
+        expected_observed = (
+            sum(precision_values, Fraction()) / self.total_cases,
+            sum(recall_values, Fraction()) / self.total_cases,
+            sum(reciprocal_rank_values, Fraction()) / self.total_cases,
+        )
+        expected_names: tuple[RetrievalMetricName, ...] = (
+            "precision_at_k",
+            "recall_at_k",
+            "mrr_at_k",
+        )
+        for metric, name, observed in zip(
+            self.metrics, expected_names, expected_observed, strict=True
+        ):
+            if metric.metric != name or (
+                metric.observed_numerator,
+                metric.observed_denominator,
+            ) != (str(observed.numerator), str(observed.denominator)):
+                raise ValueError("aggregate retrieval metrics must match case evidence")
+
+        expected_failures = tuple(
+            RetrievalGateFailure(
+                metric=metric.metric,
+                observed_numerator=metric.observed_numerator,
+                observed_denominator=metric.observed_denominator,
+                required_numerator=metric.required_numerator,
+                required_denominator=metric.required_denominator,
+            )
+            for metric in self.metrics
+            if not metric.passed
+        )
+        if self.gate_failures != expected_failures:
+            raise ValueError("retrieval gate failures must match metric decisions")
+        if self.release_ready != (not expected_failures):
+            raise ValueError("release_ready must match retrieval metric gates")
         return self

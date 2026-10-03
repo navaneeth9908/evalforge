@@ -29,6 +29,8 @@ from evalforge.contracts import (
     EvaluationSuite,
     GroundingEvaluation,
     RepeatedObservations,
+    RetrievalEvaluation,
+    RetrievalPolicy,
     SensitiveDataPolicy,
     StabilityPolicy,
     ToolTraceExpectation,
@@ -54,6 +56,7 @@ from evalforge.provenance import (
     deterministic_run_id,
 )
 from evalforge.providers import GenerationRequest, ProviderError, openai_adapter_from_environment
+from evalforge.retrieval import build_retrieval_evaluation_artifact, evaluate_retrieval
 from evalforge.stability import analyze_stability
 from evalforge.tool_traces import TOOL_TRACE_SEMANTICS_VERSION, evaluate_tool_trace
 from evalforge.trajectories import TRAJECTORY_SEMANTICS_VERSION, evaluate_trajectory
@@ -172,6 +175,8 @@ def _read_json(path: Path, *, label: str) -> object:
         "embedding_policy": "embedding policy is invalid or ambiguous",
         "code_evidence": "code harness evidence is invalid or ambiguous",
         "code_policy": "code harness policy is invalid or ambiguous",
+        "retrieval_evaluation": "retrieval evaluation is invalid or ambiguous",
+        "retrieval_policy": "retrieval policy is invalid or ambiguous",
         "leakage_policy": "sensitive-data policy is invalid or ambiguous",
         "report": "report input is invalid or ambiguous",
     }
@@ -581,6 +586,81 @@ def code_harness_command(
     typer.echo(f"Code pass rate: {pass_rate:.2%}")
     typer.echo(f"Blocking outcomes: {blocking_cases}")
     typer.echo(f"Code harness gate: {'PASS' if release_ready else 'FAIL'}")
+    if not release_ready:
+        raise typer.Exit(code=1)
+
+
+def _write_retrieval_report(
+    evaluation_path: Path,
+    policy_path: Path,
+    report_path: Path,
+) -> tuple[int, float, float, float, bool] | str:
+    try:
+        raw_evaluation = _read_json(evaluation_path, label="retrieval_evaluation")
+        raw_policy = _read_json(policy_path, label="retrieval_policy")
+    except typer.BadParameter:
+        return "retrieval input is invalid or ambiguous"
+    try:
+        evaluation = RetrievalEvaluation.model_validate(raw_evaluation)
+        policy = RetrievalPolicy.model_validate(raw_policy)
+        report = evaluate_retrieval(evaluation, policy)
+        artifact = build_retrieval_evaluation_artifact(
+            report,
+            evaluation_sha256=canonical_json_sha256(cast(JsonValue, raw_evaluation)),
+            policy_sha256=canonical_json_sha256(cast(JsonValue, raw_policy)),
+        )
+        serialized = f"{artifact.model_dump_json(indent=2)}\n"
+    except (ValidationError, ValueError):
+        return "retrieval input is invalid or ambiguous"
+
+    temporary_path: Path | None = None
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{report_path.name}.",
+            suffix=".tmp",
+            dir=report_path.parent,
+            delete=False,
+        ) as destination:
+            temporary_path = Path(destination.name)
+            destination.write(serialized)
+        os.replace(temporary_path, report_path)
+    except OSError:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
+        return "retrieval report could not be written"
+
+    metric_values = {metric.metric: metric.observed_value for metric in report.metrics}
+    return (
+        report.cutoff_k,
+        metric_values["precision_at_k"],
+        metric_values["recall_at_k"],
+        metric_values["mrr_at_k"],
+        report.release_ready,
+    )
+
+
+@app.command("retrieval")
+def retrieval_command(
+    evaluation_path: Path,
+    policy_path: Path,
+    report_path: Annotated[Path, typer.Option()] = Path("reports/retrieval.json"),
+) -> None:
+    """Evaluate governed ranked retrieval with exact aggregate metric gates."""
+    outcome = _write_retrieval_report(evaluation_path, policy_path, report_path)
+    if isinstance(outcome, str):
+        raise typer.BadParameter(outcome)
+    cutoff_k, precision, recall, mrr, release_ready = outcome
+
+    typer.echo(f"Retrieval report: {report_path}")
+    typer.echo(f"Retrieval precision@{cutoff_k}: {precision:.2%}")
+    typer.echo(f"Retrieval recall@{cutoff_k}: {recall:.2%}")
+    typer.echo(f"Retrieval MRR@{cutoff_k}: {mrr:.2%}")
+    typer.echo(f"Retrieval gate: {'PASS' if release_ready else 'FAIL'}")
     if not release_ready:
         raise typer.Exit(code=1)
 

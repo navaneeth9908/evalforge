@@ -34,6 +34,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Exact model provider, revision, artifact digest, dimensionality, and license provenance approval
 - Task-specific code gates over approved precomputed harness and runtime provenance
 - Exact required-case accounting with redacted pass/fail/error/timeout/skipped evidence
+- Governed ranked retrieval evaluation with approved retriever, corpus, and index provenance
+- Exact macro precision@k, recall@k, and MRR@k thresholds with document-ID-free reports
 - Deterministic secret and PII detectors for email, phone, US SSN, payment-card, API-key, and private-key patterns
 - Digest allowlists, category controls, severity overrides, and configurable blocking severities
 - Redacted leakage findings for candidate outputs and nested evaluation-report values
@@ -115,6 +117,9 @@ uv run evalforge embedding-similarity examples/embedding-evaluation.json \
 
 uv run evalforge code-harness examples/code-harness-evidence.json \
   examples/code-harness-policy.json --report-path reports/code-harness.json
+
+uv run evalforge retrieval examples/retrieval-evaluation.json \
+  examples/retrieval-policy.json --report-path reports/retrieval.json
 
 uv run evalforge scan-leakage examples/leakage-outputs.json \
   --policy examples/leakage-policy.json \
@@ -393,6 +398,10 @@ Task-specific code evaluation accepts only a strict `schema_version: 1` document
 
 EvalForge does not execute candidate code. It does not accept source, commands, paths, environment values, standard output, standard error, or exception messages. The evidence producer and sandbox are trusted: operators must independently ensure that the harness executed the candidate identified by `candidate_artifact_sha256` with appropriate network, filesystem, process, CPU, memory, and wall-time controls. Candidate and provenance digests bind identity but do not prove execution, authenticity, confidentiality, or sandbox strength.
 
+Ranked retrieval evaluation accepts a strict `schema_version: 1` evaluation plus a separate policy. Retriever provenance binds the producer and revision to exact retriever, corpus, and index artifact SHA-256 digests; policy approves the canonical digest of that complete provenance and requires the exact ordered query-case set. Every case declares one or more unique relevance judgments and an ordered, duplicate-free retrieval list. The cutoff is a strict integer from 1 through 1,000. Precision@k uses `relevant_at_k / k`, recall@k uses `relevant_at_k / relevant_documents`, and reciprocal rank uses the first relevant result at or before k. Macro means are computed as exact fractions and compared to reduced numerator/denominator thresholds, so binary floating-point rounding cannot change a gate. See [`examples/retrieval-evaluation.json`](examples/retrieval-evaluation.json) and [`examples/retrieval-policy.json`](examples/retrieval-policy.json).
+
+Retrieval reports retain case IDs, counts, ranks, diagnostic metric values, exact aggregate fractions encoded as bounded decimal strings, governed public provenance, and content-addressed input/report identity. They omit relevance and retrieved document IDs. Those IDs still contribute to the input digest, which provides integrity rather than confidentiality and can be guessed when identifiers have low entropy. Metrics measure judged ranking quality, not factual correctness, corpus completeness, retriever safety, or online latency; provenance approval does not attest that an external producer actually built the claimed index.
+
 Sensitive-data scanning uses fixed deterministic detectors for email addresses, North American phone numbers, structurally valid US Social Security numbers, Luhn-valid payment-card numbers, labeled or common-prefixed API keys, and PEM private-key material. `scan-leakage` scans candidate output text; `scan-report-leakage` recursively scans string values in an evaluation report. A strict `schema_version: 1` policy selects enabled categories, overrides category severities, and chooses which severities block release. False positives can be suppressed without storing plaintext in policy by listing exact lowercase SHA-256 digests in `allowlisted_value_sha256`; the digest must be computed from the detector's exact matched value. Findings contain only a zero-based string index, category, and severity—never the matched value, output ID, JSON key, or source text. See [`examples/leakage-policy.json`](examples/leakage-policy.json) and [`examples/leakage-outputs.json`](examples/leakage-outputs.json).
 
 These detectors are intentionally conservative pattern checks, not proof of identity or secret validity. Phone and email syntax can match public or fictional values, only US SSN structure is recognized, API-key formats evolve, and encoded or obfuscated values may be missed. Digest allowlists can be brute-forced for low-entropy values and must be reviewed as security configuration. Keep source inputs and generated scan reports in controlled artifact storage even though findings are redacted.
@@ -446,6 +455,11 @@ code_ready = passed_code_cases * minimum_pass_rate_denominator
              >= minimum_pass_rate_numerator * required_code_cases
              and no outcome is error, timeout, or skipped
 
+retrieval_precision_at_k = mean(relevant_at_k / k)
+retrieval_recall_at_k = mean(relevant_at_k / relevant_documents)
+retrieval_mrr_at_k = mean(1 / first_relevant_rank_at_or_before_k, else 0)
+retrieval_ready = all three exact aggregate fractions meet policy thresholds
+
 sensitive_data_ready = no finding severity appears in blocking_severities
 ```
 
@@ -464,6 +478,8 @@ Grounding report schema version `1` emits document-ID-only retrieval evidence, c
 Embedding-similarity report schema version `1` emits approved model provenance, its canonical digest, cosine similarity, Euclidean distance, vector digests, thresholds, aggregate pass evidence, and ordered gate failures without raw vectors. The CLI binds canonical evaluation and policy digests plus canonicalization and embedding-semantics versions into `embedding_evaluation_id`. Malformed or unapproved inputs write no report; a failed quality gate writes evidence and exits `1`; a passing gate exits `0`.
 
 Code-harness report schema version `1` emits the approved producer/runtime provenance, candidate artifact digest, ordered terminal outcomes, exact threshold fraction, derived diagnostic pass rate, blocking-outcome count, and machine-readable gate failures. It excludes candidate code and runtime output. A canonical digest of the complete validated report joins the canonical evidence and policy digests plus fixed code-evaluation semantics in `code_evaluation_id`, so changing either inputs or derived evidence changes the identity. Invalid, incomplete, or unapproved evidence does not replace an existing report; report writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
+
+Retrieval report schema version `1` emits approved retriever/corpus/index provenance, ordered redacted case counts and ranks, precision@k, recall@k, MRR@k, exact aggregate fractions and threshold evidence, and ordered gate failures. The CLI binds canonical evaluation, policy, and complete validated-report digests with fixed retrieval semantics in `retrieval_evaluation_id`. Invalid, incomplete, ambiguous, or unapproved evidence does not replace an existing report; writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
 
 Sensitive-data report schema version `1` emits deterministic category/severity findings and a release verdict without matched values or caller-provided output IDs. Output and report scan commands bind canonical input and policy digests, canonicalization and Unicode-bound detector-semantics versions, and deterministic scan IDs. Invalid policies write no report; blocking findings write redacted evidence and exit `1`; clean or non-blocking findings exit `0`.
 

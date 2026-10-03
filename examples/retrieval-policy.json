@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "task_id": "support-retrieval",
+  "approved_retriever_sha256": "ae71b2bb918a9416faa48d6026472098ba290c7a2bf0e3f75cb372f19de4930e",
+  "required_case_ids": [
+    "refund-policy",
+    "shipping-policy"
+  ],
+  "cutoff_k": 3,
+  "minimum_precision_at_k": {
+    "numerator": 1,
+    "denominator": 3
+  },
+  "minimum_recall_at_k": {
+    "numerator": 1,
+    "denominator": 1
+  },
+  "minimum_mrr_at_k": {
+    "numerator": 3,
+    "denominator": 4
+  }
+}

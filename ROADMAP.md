@@ -61,7 +61,7 @@ These are intentionally open and are not prerequisites that the `v0.1.0` release
 
 - [x] Semantic-similarity and embedding metrics with governed model/version provenance
 - [x] Task-specific code evaluator over governed precomputed harness evidence
-- [ ] Retrieval evaluator
+- [x] Retrieval evaluator
 - [ ] Structured-output evaluator beyond current contracts
 - [ ] Dataset mutation and adversarial test-case generation
 - [ ] Cross-dataset scorecards and long-horizon trend analysis
