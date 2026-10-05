@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "task_id": "support-structured-output",
+  "approved_schema_catalog_sha256": "55842b6b3aeabbfe8c169e91dc52ecb650d42f1f12d2a965969baa3b88accd7a",
+  "required_case_ids": [
+    "customer-profile",
+    "support-labels"
+  ],
+  "minimum_pass_rate_numerator": 1,
+  "minimum_pass_rate_denominator": 1
+}

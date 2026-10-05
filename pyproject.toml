@@ -13,6 +13,7 @@ authors = [{ name = "Sai Navaneeth Thota", email = "navaneeththota410@gmail.com"
 dependencies = [
   "anyio>=4.4,<4.15",
   "fastapi>=0.116,<1",
+  "jsonschema>=4.25,<5",
   "pydantic>=2.11,<3",
   "typer>=0.16,<1",
   "uvicorn>=0.35,<1",
@@ -29,6 +30,7 @@ dev = [
   "pytest>=9.0.3,<10",
   "pytest-cov>=6.2,<7",
   "ruff>=0.12,<1",
+  "types-jsonschema>=4.25,<5",
 ]
 
 [tool.hatch.build.targets.wheel]

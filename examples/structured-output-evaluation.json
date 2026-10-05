@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "customer-profile",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "tickets": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "name",
+          "active",
+          "tickets"
+        ],
+        "additionalProperties": false
+      },
+      "candidate": {
+        "name": "Synthetic Customer",
+        "active": true,
+        "tickets": 3
+      }
+    },
+    {
+      "case_id": "support-labels",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "minItems": 1,
+        "maxItems": 5,
+        "uniqueItems": true
+      },
+      "candidate": [
+        "billing",
+        "priority"
+      ]
+    }
+  ]
+}

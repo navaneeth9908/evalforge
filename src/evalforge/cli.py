@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from contextlib import suppress
+from decimal import Decimal
 from math import isfinite
 from pathlib import Path
 from typing import Annotated, cast
@@ -58,6 +59,12 @@ from evalforge.provenance import (
 from evalforge.providers import GenerationRequest, ProviderError, openai_adapter_from_environment
 from evalforge.retrieval import build_retrieval_evaluation_artifact, evaluate_retrieval
 from evalforge.stability import analyze_stability
+from evalforge.structured_output import (
+    StructuredOutputEvaluation,
+    StructuredOutputPolicy,
+    build_structured_output_artifact,
+    evaluate_structured_output,
+)
 from evalforge.tool_traces import TOOL_TRACE_SEMANTICS_VERSION, evaluate_tool_trace
 from evalforge.trajectories import TRAJECTORY_SEMANTICS_VERSION, evaluate_trajectory
 
@@ -104,6 +111,8 @@ def _bounded_json_float(raw_value: str) -> float:
     significand = raw_value.lower().partition("e")[0]
     if value == 0.0 and any(digit in significand for digit in "123456789"):
         raise _UnsafeJsonError("JSON number underflows binary64")
+    if Decimal(raw_value) != Decimal(str(value)):
+        raise _UnsafeJsonError("JSON number loses precision in binary64")
     return value
 
 
@@ -177,6 +186,8 @@ def _read_json(path: Path, *, label: str) -> object:
         "code_policy": "code harness policy is invalid or ambiguous",
         "retrieval_evaluation": "retrieval evaluation is invalid or ambiguous",
         "retrieval_policy": "retrieval policy is invalid or ambiguous",
+        "structured_output_evaluation": "structured-output evaluation is invalid or ambiguous",
+        "structured_output_policy": "structured-output policy is invalid or ambiguous",
         "leakage_policy": "sensitive-data policy is invalid or ambiguous",
         "report": "report input is invalid or ambiguous",
     }
@@ -661,6 +672,71 @@ def retrieval_command(
     typer.echo(f"Retrieval recall@{cutoff_k}: {recall:.2%}")
     typer.echo(f"Retrieval MRR@{cutoff_k}: {mrr:.2%}")
     typer.echo(f"Retrieval gate: {'PASS' if release_ready else 'FAIL'}")
+    if not release_ready:
+        raise typer.Exit(code=1)
+
+
+def _write_structured_output_report(
+    evaluation_path: Path,
+    policy_path: Path,
+    report_path: Path,
+) -> tuple[float, bool] | str:
+    try:
+        raw_evaluation = _read_json(evaluation_path, label="structured_output_evaluation")
+        raw_policy = _read_json(policy_path, label="structured_output_policy")
+    except typer.BadParameter:
+        return "structured-output input is invalid or ambiguous"
+    try:
+        evaluation = StructuredOutputEvaluation.model_validate(raw_evaluation)
+        policy = StructuredOutputPolicy.model_validate(raw_policy)
+        report = evaluate_structured_output(evaluation, policy)
+        artifact = build_structured_output_artifact(
+            report,
+            evaluation_sha256=canonical_json_sha256(cast(JsonValue, raw_evaluation)),
+            policy_sha256=canonical_json_sha256(cast(JsonValue, raw_policy)),
+        )
+        serialized = f"{artifact.model_dump_json(indent=2)}\n"
+    except (ValidationError, ValueError):
+        return "structured-output input is invalid or ambiguous"
+
+    temporary_path: Path | None = None
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{report_path.name}.",
+            suffix=".tmp",
+            dir=report_path.parent,
+            delete=False,
+        ) as destination:
+            temporary_path = Path(destination.name)
+            destination.write(serialized)
+        os.replace(temporary_path, report_path)
+    except OSError:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
+        return "structured-output report could not be written"
+    return report.pass_rate, report.release_ready
+
+
+@app.command("structured-output")
+def structured_output_command(
+    evaluation_path: Path,
+    policy_path: Path,
+    report_path: Annotated[Path, typer.Option()] = Path("reports/structured-output.json"),
+) -> None:
+    """Validate structured JSON under an approved bounded JSON Schema catalog."""
+    outcome = _write_structured_output_report(evaluation_path, policy_path, report_path)
+    if isinstance(outcome, str):
+        raise typer.BadParameter(outcome)
+    pass_rate, release_ready = outcome
+
+    typer.echo(f"Structured-output report: {report_path}")
+    typer.echo(f"Structured-output pass rate: {pass_rate:.2%}")
+    typer.echo(f"Structured-output gate: {'PASS' if release_ready else 'FAIL'}")
     if not release_ready:
         raise typer.Exit(code=1)
 

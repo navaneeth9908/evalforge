@@ -36,6 +36,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Exact required-case accounting with redacted pass/fail/error/timeout/skipped evidence
 - Governed ranked retrieval evaluation with approved retriever, corpus, and index provenance
 - Exact macro precision@k, recall@k, and MRR@k thresholds with document-ID-free reports
+- Governed structured-output evaluation under a bounded Draft 2020-12 JSON Schema profile
+- Exact schema-catalog approval, case accounting, rational pass-rate gates, and value-redacted evidence
 - Deterministic secret and PII detectors for email, phone, US SSN, payment-card, API-key, and private-key patterns
 - Digest allowlists, category controls, severity overrides, and configurable blocking severities
 - Redacted leakage findings for candidate outputs and nested evaluation-report values
@@ -120,6 +122,9 @@ uv run evalforge code-harness examples/code-harness-evidence.json \
 
 uv run evalforge retrieval examples/retrieval-evaluation.json \
   examples/retrieval-policy.json --report-path reports/retrieval.json
+
+uv run evalforge structured-output examples/structured-output-evaluation.json \
+  examples/structured-output-policy.json --report-path reports/structured-output.json
 
 uv run evalforge scan-leakage examples/leakage-outputs.json \
   --policy examples/leakage-policy.json \
@@ -402,6 +407,10 @@ Ranked retrieval evaluation accepts a strict `schema_version: 1` evaluation plus
 
 Retrieval reports retain case IDs, counts, ranks, diagnostic metric values, exact aggregate fractions encoded as bounded decimal strings, governed public provenance, and content-addressed input/report identity. They omit relevance and retrieved document IDs. Those IDs still contribute to the input digest, which provides integrity rather than confidentiality and can be guessed when identifiers have low entropy. Metrics measure judged ranking quality, not factual correctness, corpus completeness, retriever safety, or online latency; provenance approval does not attest that an external producer actually built the claimed index.
 
+Structured-output evaluation accepts a strict `schema_version: 1` collection of case IDs, bounded Draft 2020-12 schemas, and candidate JSON values plus a separate policy. The policy approves the canonical digest of the exact ordered case/schema catalog, requires the same ordered case set, names the task, and sets an inclusive pass rate with a reduced JSON-safe integer fraction. The supported schema profile includes object properties and required fields, closed objects, homogeneous arrays, bounded collection/string sizes, numeric ranges, type checks, constants, enums, and uniqueness. It deliberately rejects references, dynamic references, regular-expression keywords, combinators, remote resolution, coercive bounds, duplicate case IDs, unsupported keywords, and non-JSON values. See [`examples/structured-output-evaluation.json`](examples/structured-output-evaluation.json) and [`examples/structured-output-policy.json`](examples/structured-output-policy.json).
+
+Structured-output reports retain case IDs, schema and candidate digests, validity, a capped violation count, truncation state, validator categories, exact aggregate threshold evidence, and content-addressed input/report identity. They omit raw schemas, property paths, candidate keys, and candidate values. Digests provide integrity rather than confidentiality and may permit guessing low-entropy content. Input files remain bounded by the shared parser; schema validation uses canonical key order and stops diagnostic collection after 100 violations per case. A valid failed gate still writes evidence and exits `1`; malformed, unsafe, unapproved, or incompletely accounted input does not replace an existing report and exits `2`.
+
 Sensitive-data scanning uses fixed deterministic detectors for email addresses, North American phone numbers, structurally valid US Social Security numbers, Luhn-valid payment-card numbers, labeled or common-prefixed API keys, and PEM private-key material. `scan-leakage` scans candidate output text; `scan-report-leakage` recursively scans string values in an evaluation report. A strict `schema_version: 1` policy selects enabled categories, overrides category severities, and chooses which severities block release. False positives can be suppressed without storing plaintext in policy by listing exact lowercase SHA-256 digests in `allowlisted_value_sha256`; the digest must be computed from the detector's exact matched value. Findings contain only a zero-based string index, category, and severity—never the matched value, output ID, JSON key, or source text. See [`examples/leakage-policy.json`](examples/leakage-policy.json) and [`examples/leakage-outputs.json`](examples/leakage-outputs.json).
 
 These detectors are intentionally conservative pattern checks, not proof of identity or secret validity. Phone and email syntax can match public or fictional values, only US SSN structure is recognized, API-key formats evolve, and encoded or obfuscated values may be missed. Digest allowlists can be brute-forced for low-entropy values and must be reviewed as security configuration. Keep source inputs and generated scan reports in controlled artifact storage even though findings are redacted.
@@ -412,7 +421,7 @@ These detectors are intentionally conservative pattern checks, not proof of iden
 
 The reusable [EvalForge release reports workflow](.github/workflows/evalforge-reports.yml) accepts suite, output, and leakage-policy paths. It installs only the committed lockfile, uploads JSON/JUnit/SARIF artifacts, publishes SARIF to GitHub code scanning, and fails when either evaluation or safety gates fail. Callers grant only `contents: read` and `security-events: write`; all third-party actions are pinned to verified 40-character commit SHAs. The main CI workflow dogfoods this reusable workflow on pushes to `main` with the synthetic examples.
 
-An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal; nonzero literals that underflow binary64 are rejected before validation. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
+An optional dataset manifest binds a stable dataset ID and version to the suite's canonical SHA-256 digest. Its required lineage records the source, source revision, creator, license, and at least one transformation. Unknown fields, non-integer or unsupported schema versions, malformed identifiers or digests, empty lineage values, and suite-digest mismatches fail closed. The minimum pass rate must be a JSON number rather than a boolean or numeric string. Each JSON input is limited to 1 MiB, 64 levels of nesting, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal; nonzero literals that underflow binary64 or floating-point literals that cannot round-trip through binary64 without changing their decimal value are rejected before validation. See [`examples/dataset-manifest.json`](examples/dataset-manifest.json) for synthetic data safe to publish.
 
 ## Release-gate behavior
 
@@ -460,6 +469,10 @@ retrieval_recall_at_k = mean(relevant_at_k / relevant_documents)
 retrieval_mrr_at_k = mean(1 / first_relevant_rank_at_or_before_k, else 0)
 retrieval_ready = all three exact aggregate fractions meet policy thresholds
 
+structured_output_case_valid = candidate satisfies its approved bounded JSON Schema
+structured_output_ready = valid_cases * minimum_pass_rate_denominator
+                          >= minimum_pass_rate_numerator * required_cases
+
 sensitive_data_ready = no finding severity appears in blocking_severities
 ```
 
@@ -480,6 +493,8 @@ Embedding-similarity report schema version `1` emits approved model provenance, 
 Code-harness report schema version `1` emits the approved producer/runtime provenance, candidate artifact digest, ordered terminal outcomes, exact threshold fraction, derived diagnostic pass rate, blocking-outcome count, and machine-readable gate failures. It excludes candidate code and runtime output. A canonical digest of the complete validated report joins the canonical evidence and policy digests plus fixed code-evaluation semantics in `code_evaluation_id`, so changing either inputs or derived evidence changes the identity. Invalid, incomplete, or unapproved evidence does not replace an existing report; report writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
 
 Retrieval report schema version `1` emits approved retriever/corpus/index provenance, ordered redacted case counts and ranks, precision@k, recall@k, MRR@k, exact aggregate fractions and threshold evidence, and ordered gate failures. The CLI binds canonical evaluation, policy, and complete validated-report digests with fixed retrieval semantics in `retrieval_evaluation_id`. Invalid, incomplete, ambiguous, or unapproved evidence does not replace an existing report; writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
+
+Structured-output report schema version `1` emits approved schema-catalog identity, ordered value-redacted case evidence, bounded validator categories, exact threshold fractions, and derived gate failures. The CLI binds canonical evaluation, policy, and complete validated-report digests with `bounded-json-schema-2020-12-v1` semantics in `structured_output_evaluation_id`. Invalid, ambiguous, unsafe, unapproved, or incompletely accounted input does not replace an existing report; writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
 
 Sensitive-data report schema version `1` emits deterministic category/severity findings and a release verdict without matched values or caller-provided output IDs. Output and report scan commands bind canonical input and policy digests, canonicalization and Unicode-bound detector-semantics versions, and deterministic scan IDs. Invalid policies write no report; blocking findings write redacted evidence and exit `1`; clean or non-blocking findings exit `0`.
 

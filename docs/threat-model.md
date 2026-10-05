@@ -14,6 +14,7 @@ EvalForge v0.1.0 does **not** provide authentication, authorization, tenant isol
 - Evaluation and safety reports used to approve or block a release
 - Candidate code artifacts and precomputed code-harness evidence
 - Retriever, corpus, index, relevance-judgment, and ranked-result evidence
+- Structured-output schemas, candidate JSON values, and schema-validation release evidence
 - SQLite registry integrity and availability
 - CI check results, JUnit, and SARIF artifacts
 - The host filesystem and network reachable by the EvalForge process
@@ -40,6 +41,7 @@ flowchart LR
     E --> CI[JUnit and SARIF exports]
     H[Trusted external code sandbox] -->|bounded outcome evidence| V
     R[Trusted retrieval evidence producer] -->|ranked IDs and relevance judgments| V
+    J[Structured-output producer] -->|schemas and candidate JSON| V
 ```
 
 1. **Caller to parser/API.** JSON, path arguments, suite definitions, regular expressions, traces, and output text are attacker-controlled. Limits and strict schemas must run before expensive work.
@@ -50,6 +52,7 @@ flowchart LR
 6. **Repository to CI/container.** Dependencies, Actions, build context, and generated files can affect release integrity. Locking, immutable Action references, minimal build context, and a non-root runtime reduce exposure.
 7. **External code harness to evaluator.** Candidate code is untrusted, but its sandbox and evidence producer are trusted. EvalForge validates provenance, exact case accounting, and terminal outcomes; it does not execute code or attest sandbox controls.
 8. **Retrieval producer to evaluator.** The producer supplies relevance judgments and ranked IDs under approved retriever/corpus/index provenance. EvalForge recomputes metrics but does not attest corpus completeness, judgment quality, or that the claimed artifacts produced the supplied ranking.
+9. **Structured-output producer to evaluator.** Candidate values and schemas are untrusted. EvalForge permits only a bounded, reference-free schema profile, approves the exact ordered schema catalog by digest, and emits value-redacted validation evidence; it does not prove that a schema captures the product's complete semantic contract.
 
 ## Threats and controls
 
@@ -67,6 +70,7 @@ flowchart LR
 | False release approval | Fail-closed thresholds, exact evidence cardinality, strict integers, provenance digests, deterministic IDs, tests across gate failures | Deterministic metrics can be incomplete proxies for product quality; human review remains necessary |
 | Forged or incomplete code-test evidence | Approved producer/runtime provenance digest, exact ordered required-case accounting, blocking infrastructure outcomes, content-addressed candidate/evidence IDs | JSON evidence is not a signed execution attestation; producer compromise or weak sandboxing remains external |
 | Forged, biased, or privacy-sensitive retrieval evidence | Approved retriever/corpus/index provenance, exact case accounting, bounded unique IDs, exact-fraction gates, document-ID-free reports | The producer and relevance judgments remain trusted; low-entropy IDs may be guessed from input digests; metrics do not prove corpus completeness or factuality |
+| Unsafe or privacy-sensitive structured-output validation | Reference-free bounded schema profile, exact schema-catalog approval, shared JSON limits, capped diagnostics, atomic report replacement, and value/path-redacted reports | Complex permitted schemas still consume bounded local CPU; digests of low-entropy schemas or values may be guessed; schema validity does not prove business correctness |
 | Supply-chain or CI tampering | Locked Python dependencies, immutable Action commit SHAs, least-privilege workflow permissions, build/test gates | PyPI, GitHub, or a dependency could still be compromised; no artifact signing/SBOM in v0.1.0 |
 | Path traversal or accidental file disclosure | CLI writes to explicit operator paths; container uses a fixed application directory and non-root user | The trusted local operator can choose destructive or sensitive paths; API does not accept arbitrary output paths |
 

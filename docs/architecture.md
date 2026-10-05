@@ -23,6 +23,7 @@ flowchart LR
     EM[Embedding pairs and approval policy] --> V
     CH[Precomputed code harness evidence and policy] --> V
     RE[Ranked retrieval evidence and policy] --> V
+    SO[Structured JSON, bounded schemas, and approval policy] --> V
     V --> H[Canonical SHA-256 fingerprints]
     V --> SJ[Role-separated structured judge request]
     SJ --> JS[Schema-constrained score parsing]
@@ -35,6 +36,8 @@ flowchart LR
     CE --> X
     H --> REE[Exact-fraction ranked retrieval evaluator]
     REE --> X
+    H --> SOE[Bounded Draft 2020-12 structured-output evaluator]
+    SOE --> X
     H --> L[Per-tool multiset matcher]
     H --> TE[Ordered trajectory evaluator]
     TE --> TF[State, termination, and loop findings]
@@ -80,6 +83,8 @@ The task-specific code boundary evaluates precomputed terminal outcomes and neve
 
 The ranked-retrieval boundary evaluates precomputed relevance judgments and ordered result IDs without querying a live index. Provenance binds producer/revision plus retriever, corpus, and index artifact digests; policy approves that normalized identity and requires an exact ordered case set. Precision@k, recall@k, and reciprocal rank are accumulated as exact fractions and compared with canonical reduced rational thresholds. Reports retain only case IDs, counts, first-hit ranks, diagnostics, and exact aggregate fraction strings—not document IDs. Canonical evaluation, policy, and validated-report digests plus fixed semantics produce a deterministic retrieval evaluation ID.
 
+The structured-output boundary validates candidate JSON against an approved ordered catalog of schemas under a deliberately bounded Draft 2020-12 profile. It supports deterministic object, array, scalar, enum, constant, and finite range constraints while rejecting references, regular-expression keywords, combinators, remote resolution, unknown keywords, and coercive limits. Canonical schema ordering makes diagnostics deterministic; collection, nesting, file, string, numeric, and diagnostic-count limits bound work. Exact reduced pass-rate fractions decide release. Reports retain case IDs, schema/candidate digests, validity, capped violation counts, truncation flags, and validator categories, but omit raw schemas, paths, keys, and values. Canonical evaluation, policy, and validated-report digests plus fixed profile semantics produce a deterministic structured-output evaluation ID.
+
 The CLI bounds each untrusted JSON file to 1 MiB, 64 nesting levels, 100,000 decoded nodes, 65,536 characters per string, and 256 characters per numeric literal. It rejects duplicate keys, non-finite constants, nonzero literals that underflow binary64, coercive threshold or resource-evidence types, ambiguous legacy/declarative policies, invalid comparison budgets, and invalid Unicode before evaluation. Embedding parsing, validation, evaluation, and report construction run in a helper that returns only pass-rate and gate status after sensitive frames unwind; sanitized CLI errors and exits therefore do not retain raw vectors in traceback locals or exception chains. Canonicalization operates on successfully validated raw JSON values before typed-model normalization, using sorted keys, compact separators, UTF-8 encoding, non-finite-number rejection, and negative-zero normalization before computing SHA-256 digests. Every schema-version-5 evaluation report records suite and candidate digests, canonicalization and evaluator-semantics versions, a run ID bound to that complete preimage, effective thresholds and sources, weighted slice summaries, deterministic resource evidence, and machine-readable quality or resource failures. Schema-version-3 comparison reports include two full schema-version-5 evaluations, the policy and its digest, all input digests, weighted regression evidence, deterministic deltas, matrix and ablation evidence, and a content-addressed comparison ID whose preimage is versioned at `3` and binds canonicalization semantics. Evaluator-semantics version `3` binds resource-gate behavior and includes the runtime Unicode database version used by trimming and case folding. An optional strict, versioned dataset manifest records source lineage and binds it to the suite digest; mismatches fail closed before evaluation. Reports retain only its digest and a minimal dataset ID, version, and license summary so private source locations and creator identities are not propagated.
 
 The local control plane places `EvalForgeService` between the API and a transactional SQLite `RunRegistry`. It registers canonical suites, runs the same deterministic engine, and stores immutable reports under deterministic IDs. Versioned FastAPI routes expose bounded suite/run lists and report retrieval. The basic dashboard renders only run summaries with escaped metadata and report links; candidate text is excluded. The container runs as a non-root user and the default Compose mapping is loopback-only. Authentication, multi-tenancy, a full regression analytics dashboard, and distributed execution are post-v0.1.0 work.
@@ -117,7 +122,7 @@ flowchart TB
 ## Design boundaries
 
 - **Deterministic by default:** core tests and examples make no network calls.
-- **Fail closed:** empty candidate-output scans, duplicate or malformed policy controls, blocking sensitive-data findings, empty or duplicate repeated observations, malformed or duplicate tool-call IDs, disallowed or unmatched calls, invalid or discontinuous trajectory steps, forbidden transitions, premature or missing termination, disallowed loops, missing or partial resource evidence, aggregate resource overflow, ambiguous policies, unsafe regular expressions, invalid thresholds or measurements, and mismatched case IDs stop evaluation.
+- **Fail closed:** empty candidate-output scans, duplicate or malformed policy controls, blocking sensitive-data findings, empty or duplicate repeated observations, malformed or duplicate tool-call IDs, disallowed or unmatched calls, invalid or discontinuous trajectory steps, forbidden transitions, premature or missing termination, disallowed loops, missing or partial resource evidence, aggregate resource overflow, ambiguous policies, unsafe regular expressions or schema keywords, invalid thresholds or measurements, unapproved schema catalogs, and mismatched case IDs stop evaluation.
 - **Evidence before verdict:** aggregate decisions retain ordered case-level results; tool-trace reports retain ordered call metadata and value digests without copying raw arguments or results; trajectory reports retain ordered rule/step findings without action payloads.
 - **Provider isolation:** networked provider adapters remain outside the metric and policy core; offline fakes exercise the same typed boundary.
 - **No secret persistence:** credentials are supplied at runtime and never written to reports; sensitive-data findings omit matched values and use digest-only allowlists.
