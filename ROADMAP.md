@@ -63,7 +63,7 @@ These are intentionally open and are not prerequisites that the `v0.1.0` release
 - [x] Task-specific code evaluator over governed precomputed harness evidence
 - [x] Retrieval evaluator
 - [x] Structured-output evaluator beyond current contracts
-- [ ] Dataset mutation and adversarial test-case generation
+- [x] Dataset mutation and adversarial test-case generation
 - [ ] Cross-dataset scorecards and long-horizon trend analysis
 
 ### M6 — production control plane

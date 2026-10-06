@@ -110,7 +110,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "M5 task-specific code harness evaluation | Complete" in acceptance
     assert "M5 ranked retrieval evaluation | Complete" in acceptance
     assert "M5 governed structured-output evaluation | Complete" in acceptance
-    assert "Remaining M5 evaluator catalog, mutations, and scorecards | In progress" in acceptance
+    assert "M5 dataset mutation and adversarial test-case generation | Complete" in acceptance
+    assert "Remaining M5 cross-dataset scorecards and trends | In progress" in acceptance
 
     for example in (
         "code-harness-evidence.json",
@@ -119,15 +120,18 @@ def test_release_documentation_is_complete_and_truthful() -> None:
         "retrieval-policy.json",
         "structured-output-evaluation.json",
         "structured-output-policy.json",
+        "mutation-plan.json",
     ):
         assert (ROOT / "examples" / example).is_file()
         assert example in readme
     assert "EvalForge does not execute candidate code" in readme
+    assert "evalforge mutate-dataset" in readme
 
     roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
     assert "[x] Task-specific code evaluator" in roadmap
     assert "[x] Retrieval evaluator" in roadmap
     assert "[x] Structured-output evaluator beyond current contracts" in roadmap
+    assert "[x] Dataset mutation and adversarial test-case generation" in roadmap
 
     deployment = (ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
     assert "--factory evalforge.server:create_app_from_environment" in deployment

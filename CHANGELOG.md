@@ -10,6 +10,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Task-specific code evaluation over governed precomputed harness outcomes with exact case accounting, content-addressed candidate identity, and no candidate code execution.
 - Ranked retrieval evaluation with governed retriever/corpus/index provenance, exact precision@k, recall@k, and MRR@k gates, redacted case evidence, and deterministic CLI artifacts.
 - Governed structured-output evaluation with an approved bounded Draft 2020-12 schema catalog, exact rational pass-rate gates, value-redacted diagnostics, and deterministic atomic CLI artifacts.
+- Deterministic dataset mutation with source-bound adversarial plans, reproducible prompt transformations, content-addressed campaign artifacts, and tamper-resistant generation evidence.
 
 ### Security
 

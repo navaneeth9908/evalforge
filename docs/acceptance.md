@@ -19,6 +19,7 @@ This page maps the release contract to executable evidence. A checked item means
 | Governed task-specific code harness evaluation | `tests/test_code_evaluation.py`, `tests/test_cli_code_evaluation.py` | Verified |
 | Governed ranked retrieval evaluation | `tests/test_retrieval_evaluation.py`, `tests/test_cli_retrieval.py` | Verified |
 | Governed bounded structured-output evaluation | `tests/test_structured_output_evaluation.py`, `tests/test_cli_structured_output.py` | Verified |
+| Governed deterministic dataset mutation | `tests/test_dataset_mutations.py`, `tests/test_cli_dataset_mutations.py` | Verified |
 
 Run the complete credential-free tracer bullet:
 
@@ -43,7 +44,8 @@ The release includes the deterministic core and the implemented local operations
 | M5 task-specific code harness evaluation | Complete |
 | M5 ranked retrieval evaluation | Complete |
 | M5 governed structured-output evaluation | Complete |
-| Remaining M5 evaluator catalog, mutations, and scorecards | In progress |
+| M5 dataset mutation and adversarial test-case generation | Complete |
+| Remaining M5 cross-dataset scorecards and trends | In progress |
 | Basic local run dashboard | Complete |
 | Full regression analytics dashboard | Not implemented |
 | Authentication and multi-tenancy | Not implemented |

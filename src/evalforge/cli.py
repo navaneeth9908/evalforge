@@ -37,6 +37,7 @@ from evalforge.contracts import (
     ToolTraceExpectation,
     TrajectoryPolicy,
 )
+from evalforge.dataset_mutations import MutationPlan, generate_mutation_artifact
 from evalforge.demo import run_synthetic_demo
 from evalforge.embedding_similarity import (
     EMBEDDING_SEMANTICS_VERSION,
@@ -188,6 +189,8 @@ def _read_json(path: Path, *, label: str) -> object:
         "retrieval_policy": "retrieval policy is invalid or ambiguous",
         "structured_output_evaluation": "structured-output evaluation is invalid or ambiguous",
         "structured_output_policy": "structured-output policy is invalid or ambiguous",
+        "mutation_suite": "mutation source suite is invalid or ambiguous",
+        "mutation_plan": "mutation plan is invalid or ambiguous",
         "leakage_policy": "sensitive-data policy is invalid or ambiguous",
         "report": "report input is invalid or ambiguous",
     }
@@ -739,6 +742,64 @@ def structured_output_command(
     typer.echo(f"Structured-output gate: {'PASS' if release_ready else 'FAIL'}")
     if not release_ready:
         raise typer.Exit(code=1)
+
+
+def _write_mutation_artifact(
+    suite_path: Path,
+    plan_path: Path,
+    artifact_path: Path,
+) -> tuple[int, str] | str:
+    try:
+        raw_suite = _read_json(suite_path, label="mutation_suite")
+        raw_plan = _read_json(plan_path, label="mutation_plan")
+    except typer.BadParameter:
+        return "mutation input is invalid or ambiguous"
+    try:
+        suite = EvaluationSuite.model_validate(raw_suite)
+        plan = MutationPlan.model_validate(raw_plan)
+        artifact = generate_mutation_artifact(suite, plan)
+        serialized = f"{artifact.model_dump_json(indent=2, exclude_none=True)}\n"
+    except (ValidationError, ValueError, TypeError):
+        return "mutation input is invalid or ambiguous"
+
+    temporary_path: Path | None = None
+    try:
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{artifact_path.name}.",
+            suffix=".tmp",
+            dir=artifact_path.parent,
+            delete=False,
+        ) as destination:
+            temporary_path = Path(destination.name)
+            destination.write(serialized)
+        os.replace(temporary_path, artifact_path)
+    except OSError:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
+        return "mutation artifact could not be written"
+    return len(artifact.generated_suite.cases), artifact.mutation_campaign_id
+
+
+@app.command("mutate-dataset")
+def mutate_dataset_command(
+    suite_path: Path,
+    plan_path: Path,
+    artifact_path: Annotated[Path, typer.Option()] = Path("reports/mutations.json"),
+) -> None:
+    """Generate deterministic adversarial cases from a source suite and governed plan."""
+    outcome = _write_mutation_artifact(suite_path, plan_path, artifact_path)
+    if isinstance(outcome, str):
+        raise typer.BadParameter(outcome)
+    generated_cases, campaign_id = outcome
+
+    typer.echo(f"Mutation artifact: {artifact_path}")
+    typer.echo(f"Generated mutation cases: {generated_cases}")
+    typer.echo(f"Mutation campaign ID: {campaign_id}")
 
 
 @app.command("scan-leakage")

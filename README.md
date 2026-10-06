@@ -38,6 +38,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Exact macro precision@k, recall@k, and MRR@k thresholds with document-ID-free reports
 - Governed structured-output evaluation under a bounded Draft 2020-12 JSON Schema profile
 - Exact schema-catalog approval, case accounting, rational pass-rate gates, and value-redacted evidence
+- Governed deterministic prompt mutation with source-suite approval and explicit adversarial plans
+- Prefix, injection-suffix, and character-deletion operators with reproducible generated suites
 - Deterministic secret and PII detectors for email, phone, US SSN, payment-card, API-key, and private-key patterns
 - Digest allowlists, category controls, severity overrides, and configurable blocking severities
 - Redacted leakage findings for candidate outputs and nested evaluation-report values
@@ -125,6 +127,9 @@ uv run evalforge retrieval examples/retrieval-evaluation.json \
 
 uv run evalforge structured-output examples/structured-output-evaluation.json \
   examples/structured-output-policy.json --report-path reports/structured-output.json
+
+uv run evalforge mutate-dataset examples/suite.json examples/mutation-plan.json \
+  --artifact-path reports/mutations.json
 
 uv run evalforge scan-leakage examples/leakage-outputs.json \
   --policy examples/leakage-policy.json \
@@ -411,6 +416,10 @@ Structured-output evaluation accepts a strict `schema_version: 1` collection of 
 
 Structured-output reports retain case IDs, schema and candidate digests, validity, a capped violation count, truncation state, validator categories, exact aggregate threshold evidence, and content-addressed input/report identity. They omit raw schemas, property paths, candidate keys, and candidate values. Digests provide integrity rather than confidentiality and may permit guessing low-entropy content. Input files remain bounded by the shared parser; schema validation uses canonical key order and stops diagnostic collection after 100 violations per case. A valid failed gate still writes evidence and exits `1`; malformed, unsafe, unapproved, or incompletely accounted input does not replace an existing report and exits `2`.
 
+Dataset mutation accepts a strict `schema_version: 1` plan bound to the normalized source-suite digest. Each ordered mutation names one source case and applies exactly one bounded operator: literal prompt prefix, explicit prompt-injection suffix, or deletion of one Unicode code point at a declared index. Mutation IDs are unique and become part of generated case IDs; expected outputs, metrics, thresholds, weights, severities, categories, tags, and the suite release policy are preserved. Unknown cases, stale source digests, invalid operator parameters, out-of-range deletions, duplicate generated IDs, and prompts that exceed the existing suite limits fail before an artifact is written. See [`examples/mutation-plan.json`](examples/mutation-plan.json).
+
+The deterministic artifact embeds the validated source suite, plan, and generated suite plus content-redacted per-case prompt digests. It binds those inputs, fixed mutation semantics, canonicalization version, and generated suite to a mutation campaign ID, and re-derives the generated cases when the artifact is loaded so rehashed tampering cannot pass. Because source and generated prompts are intentionally present to make the dataset usable, mutation artifacts are controlled dataset material—not public redacted reports. Operators choose all mutation text; the built-in operators generate reproducible stress cases but do not prove adversarial coverage, safety, or realism.
+
 Sensitive-data scanning uses fixed deterministic detectors for email addresses, North American phone numbers, structurally valid US Social Security numbers, Luhn-valid payment-card numbers, labeled or common-prefixed API keys, and PEM private-key material. `scan-leakage` scans candidate output text; `scan-report-leakage` recursively scans string values in an evaluation report. A strict `schema_version: 1` policy selects enabled categories, overrides category severities, and chooses which severities block release. False positives can be suppressed without storing plaintext in policy by listing exact lowercase SHA-256 digests in `allowlisted_value_sha256`; the digest must be computed from the detector's exact matched value. Findings contain only a zero-based string index, category, and severity—never the matched value, output ID, JSON key, or source text. See [`examples/leakage-policy.json`](examples/leakage-policy.json) and [`examples/leakage-outputs.json`](examples/leakage-outputs.json).
 
 These detectors are intentionally conservative pattern checks, not proof of identity or secret validity. Phone and email syntax can match public or fictional values, only US SSN structure is recognized, API-key formats evolve, and encoded or obfuscated values may be missed. Digest allowlists can be brute-forced for low-entropy values and must be reviewed as security configuration. Keep source inputs and generated scan reports in controlled artifact storage even though findings are redacted.
@@ -473,6 +482,9 @@ structured_output_case_valid = candidate satisfies its approved bounded JSON Sch
 structured_output_ready = valid_cases * minimum_pass_rate_denominator
                           >= minimum_pass_rate_numerator * required_cases
 
+generated_prompt = deterministic_operator(source_prompt, mutation_parameters)
+mutation_campaign_id = sha256(source_suite, plan, generated_suite, semantics)
+
 sensitive_data_ready = no finding severity appears in blocking_severities
 ```
 
@@ -495,6 +507,8 @@ Code-harness report schema version `1` emits the approved producer/runtime prove
 Retrieval report schema version `1` emits approved retriever/corpus/index provenance, ordered redacted case counts and ranks, precision@k, recall@k, MRR@k, exact aggregate fractions and threshold evidence, and ordered gate failures. The CLI binds canonical evaluation, policy, and complete validated-report digests with fixed retrieval semantics in `retrieval_evaluation_id`. Invalid, incomplete, ambiguous, or unapproved evidence does not replace an existing report; writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
 
 Structured-output report schema version `1` emits approved schema-catalog identity, ordered value-redacted case evidence, bounded validator categories, exact threshold fractions, and derived gate failures. The CLI binds canonical evaluation, policy, and complete validated-report digests with `bounded-json-schema-2020-12-v1` semantics in `structured_output_evaluation_id`. Invalid, ambiguous, unsafe, unapproved, or incompletely accounted input does not replace an existing report; writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
+
+Mutation artifact schema version `1` embeds the strict source suite, mutation plan, generated suite, and redacted mutation records. Normalized source, plan, and generated-suite digests plus `deterministic-prompt-mutations-v1` semantics form `mutation_campaign_id`. Artifact validation independently recreates every generated prompt and case from the embedded source and plan. Invalid or ambiguous inputs do not replace an existing artifact; writes use same-directory temporary files and atomic replacement; successful generation exits `0`.
 
 Sensitive-data report schema version `1` emits deterministic category/severity findings and a release verdict without matched values or caller-provided output IDs. Output and report scan commands bind canonical input and policy digests, canonicalization and Unicode-bound detector-semantics versions, and deterministic scan IDs. Invalid policies write no report; blocking findings write redacted evidence and exit `1`; clean or non-blocking findings exit `0`.
 
