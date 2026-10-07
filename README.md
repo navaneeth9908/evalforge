@@ -40,6 +40,8 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Exact schema-catalog approval, case accounting, rational pass-rate gates, and value-redacted evidence
 - Governed deterministic prompt mutation with source-suite approval and explicit adversarial plans
 - Prefix, injection-suffix, and character-deletion operators with reproducible generated suites
+- Governed precomputed cross-dataset scorecards with exact ordered dataset coverage and weights
+- Long-horizon first/latest/peak/max-drawdown analysis with dataset and overall release budgets
 - Deterministic secret and PII detectors for email, phone, US SSN, payment-card, API-key, and private-key patterns
 - Digest allowlists, category controls, severity overrides, and configurable blocking severities
 - Redacted leakage findings for candidate outputs and nested evaluation-report values
@@ -130,6 +132,10 @@ uv run evalforge structured-output examples/structured-output-evaluation.json \
 
 uv run evalforge mutate-dataset examples/suite.json examples/mutation-plan.json \
   --artifact-path reports/mutations.json
+
+uv run evalforge cross-dataset-trends examples/cross-dataset-observations.json \
+  examples/cross-dataset-policy.json \
+  --artifact-path reports/cross-dataset-trends.json
 
 uv run evalforge scan-leakage examples/leakage-outputs.json \
   --policy examples/leakage-policy.json \
@@ -420,6 +426,10 @@ Dataset mutation accepts a strict `schema_version: 1` plan bound to the normaliz
 
 The deterministic artifact embeds the validated source suite, plan, and generated suite plus content-redacted per-case prompt digests. It binds those inputs, fixed mutation semantics, canonicalization version, and generated suite to a mutation campaign ID, and re-derives the generated cases when the artifact is loaded so rehashed tampering cannot pass. Because source and generated prompts are intentionally present to make the dataset usable, mutation artifacts are controlled dataset material—not public redacted reports. Operators choose all mutation text; the built-in operators generate reproducible stress cases but do not prove adversarial coverage, safety, or realism.
 
+Cross-dataset trend analysis accepts strict `schema_version: 1` precomputed observations plus a separate policy. The policy approves the normalized producer digest and declares the exact ordered dataset catalog: dataset ID and version, suite digest, evaluator-semantics version, weight, and inclusive maximum drawdown. Scores and drawdown budgets are in `[0, 1]` with at most six decimal places; weights are in `[0.001, 1000.0]` in exact `0.001` increments. Every checkpoint must cover that catalog exactly in the same order with unchanged identity fields and use a strictly increasing canonical whole-second UTC timestamp ending in `Z`. Each observation supplies only a bounded score and the underlying dataset gate verdict. See [`examples/cross-dataset-observations.json`](examples/cross-dataset-observations.json) and [`examples/cross-dataset-policy.json`](examples/cross-dataset-policy.json).
+
+The evaluator uses fixed-point score and weight ticks with exact rational aggregation for each checkpoint, then reports first, latest, peak, and maximum peak-to-later-score drawdown over the complete history for every dataset and overall. A release passes only when every latest underlying dataset gate passes and no dataset or overall drawdown exceeds its budget; equality is accepted. Earlier underlying gate failures remain represented by their scores but do not replace the explicit latest-gate decision. Reports contain canonical increasing timestamps, dataset identity, scores, weights, budgets, and strict boolean verdicts, but no prompts, outputs, or full lineage. The artifact embeds the content-free observations and strict policy, re-derives their digests and the complete report during validation, and binds minimal producer provenance plus canonical observation, policy, and report digests to `cross-dataset-scorecard-v1` semantics and a deterministic analysis ID.
+
 Sensitive-data scanning uses fixed deterministic detectors for email addresses, North American phone numbers, structurally valid US Social Security numbers, Luhn-valid payment-card numbers, labeled or common-prefixed API keys, and PEM private-key material. `scan-leakage` scans candidate output text; `scan-report-leakage` recursively scans string values in an evaluation report. A strict `schema_version: 1` policy selects enabled categories, overrides category severities, and chooses which severities block release. False positives can be suppressed without storing plaintext in policy by listing exact lowercase SHA-256 digests in `allowlisted_value_sha256`; the digest must be computed from the detector's exact matched value. Findings contain only a zero-based string index, category, and severity—never the matched value, output ID, JSON key, or source text. See [`examples/leakage-policy.json`](examples/leakage-policy.json) and [`examples/leakage-outputs.json`](examples/leakage-outputs.json).
 
 These detectors are intentionally conservative pattern checks, not proof of identity or secret validity. Phone and email syntax can match public or fictional values, only US SSN structure is recognized, API-key formats evolve, and encoded or obfuscated values may be missed. Digest allowlists can be brute-forced for low-entropy values and must be reviewed as security configuration. Keep source inputs and generated scan reports in controlled artifact storage even though findings are redacted.
@@ -485,6 +495,12 @@ structured_output_ready = valid_cases * minimum_pass_rate_denominator
 generated_prompt = deterministic_operator(source_prompt, mutation_parameters)
 mutation_campaign_id = sha256(source_suite, plan, generated_suite, semantics)
 
+checkpoint_score = sum(dataset_score * dataset_weight) / sum(dataset_weight)
+max_drawdown = max(previous_peak - later_score, 0) over the complete history
+trend_ready = every latest underlying dataset gate passes
+              and every dataset drawdown <= its configured maximum
+              and overall drawdown <= its configured maximum
+
 sensitive_data_ready = no finding severity appears in blocking_severities
 ```
 
@@ -509,6 +525,8 @@ Retrieval report schema version `1` emits approved retriever/corpus/index proven
 Structured-output report schema version `1` emits approved schema-catalog identity, ordered value-redacted case evidence, bounded validator categories, exact threshold fractions, and derived gate failures. The CLI binds canonical evaluation, policy, and complete validated-report digests with `bounded-json-schema-2020-12-v1` semantics in `structured_output_evaluation_id`. Invalid, ambiguous, unsafe, unapproved, or incompletely accounted input does not replace an existing report; writes use same-directory temporary files and atomic replacement; a valid failed gate writes evidence and exits `1`; a passing gate exits `0`.
 
 Mutation artifact schema version `1` embeds the strict source suite, mutation plan, generated suite, and redacted mutation records. Normalized source, plan, and generated-suite digests plus `deterministic-prompt-mutations-v1` semantics form `mutation_campaign_id`. Artifact validation independently recreates every generated prompt and case from the embedded source and plan. Invalid or ambiguous inputs do not replace an existing artifact; writes use same-directory temporary files and atomic replacement; successful generation exits `0`.
+
+Cross-dataset trend artifact schema version `1` embeds the strict policy and emits minimal producer identity, ordered weighted checkpoint scores, ordered dataset scorecards, complete-history overall statistics, and machine-readable latest-gate/drawdown failures. Validation re-derives weighted scores, summaries, gates, policy controls, and policy/report digests. Producer, normalized observation, policy, and validated-report digests plus canonicalization and `cross-dataset-scorecard-v1` semantics form `trend_analysis_id`. Invalid, ambiguous, unapproved, reordered, or identity-drifted input does not replace an existing artifact; writes use same-directory temporary files and atomic replacement. A valid blocked trend writes evidence and exits `1`; a passing trend exits `0`; invalid input exits `2`.
 
 Sensitive-data report schema version `1` emits deterministic category/severity findings and a release verdict without matched values or caller-provided output IDs. Output and report scan commands bind canonical input and policy digests, canonicalization and Unicode-bound detector-semantics versions, and deterministic scan IDs. Invalid policies write no report; blocking findings write redacted evidence and exit `1`; clean or non-blocking findings exit `0`.
 

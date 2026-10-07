@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "producer": {
+    "producer_id": "offline-evaluation-exporter",
+    "revision": "exporter-v3",
+    "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "checkpoints": [
+    {
+      "observed_at": "2026-01-01T00:00:00Z",
+      "datasets": [
+        {
+          "dataset_id": "support",
+          "dataset_version": "2026-09",
+          "suite_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "evaluator_semantics_version": "text-metrics-v3",
+          "score": 0.6,
+          "release_ready": true
+        },
+        {
+          "dataset_id": "safety",
+          "dataset_version": "2026-09",
+          "suite_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "evaluator_semantics_version": "policy-v2",
+          "score": 0.8,
+          "release_ready": true
+        }
+      ]
+    },
+    {
+      "observed_at": "2026-02-01T00:00:00Z",
+      "datasets": [
+        {
+          "dataset_id": "support",
+          "dataset_version": "2026-09",
+          "suite_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "evaluator_semantics_version": "text-metrics-v3",
+          "score": 0.9,
+          "release_ready": true
+        },
+        {
+          "dataset_id": "safety",
+          "dataset_version": "2026-09",
+          "suite_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "evaluator_semantics_version": "policy-v2",
+          "score": 0.7,
+          "release_ready": true
+        }
+      ]
+    },
+    {
+      "observed_at": "2026-03-01T00:00:00Z",
+      "datasets": [
+        {
+          "dataset_id": "support",
+          "dataset_version": "2026-09",
+          "suite_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "evaluator_semantics_version": "text-metrics-v3",
+          "score": 0.75,
+          "release_ready": true
+        },
+        {
+          "dataset_id": "safety",
+          "dataset_version": "2026-09",
+          "suite_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "evaluator_semantics_version": "policy-v2",
+          "score": 0.75,
+          "release_ready": true
+        }
+      ]
+    }
+  ]
+}

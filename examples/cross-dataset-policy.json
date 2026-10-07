@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "approved_producer_sha256": "965b8b5045953eeaaab45185ebca85145ab586932f66a952721cd7cd5d22cdc4",
+  "datasets": [
+    {
+      "dataset_id": "support",
+      "dataset_version": "2026-09",
+      "suite_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "evaluator_semantics_version": "text-metrics-v3",
+      "weight": 3.0,
+      "max_drawdown": 0.2
+    },
+    {
+      "dataset_id": "safety",
+      "dataset_version": "2026-09",
+      "suite_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "evaluator_semantics_version": "policy-v2",
+      "weight": 1.0,
+      "max_drawdown": 0.1
+    }
+  ],
+  "max_overall_drawdown": 0.15
+}

@@ -16,6 +16,7 @@ EvalForge v0.1.0 does **not** provide authentication, authorization, tenant isol
 - Retriever, corpus, index, relevance-judgment, and ranked-result evidence
 - Structured-output schemas, candidate JSON values, and schema-validation release evidence
 - Source suites, adversarial mutation plans, and generated prompt datasets
+- Governed cross-dataset score histories, trend policies, and release evidence
 - SQLite registry integrity and availability
 - CI check results, JUnit, and SARIF artifacts
 - The host filesystem and network reachable by the EvalForge process
@@ -44,6 +45,7 @@ flowchart LR
     R[Trusted retrieval evidence producer] -->|ranked IDs and relevance judgments| V
     J[Structured-output producer] -->|schemas and candidate JSON| V
     M[Mutation-plan author] -->|source-bound transformations| V
+    T[Trusted trend producer] -->|score histories and gate verdicts| V
 ```
 
 1. **Caller to parser/API.** JSON, path arguments, suite definitions, regular expressions, traces, and output text are attacker-controlled. Limits and strict schemas must run before expensive work.
@@ -56,6 +58,7 @@ flowchart LR
 8. **Retrieval producer to evaluator.** The producer supplies relevance judgments and ranked IDs under approved retriever/corpus/index provenance. EvalForge recomputes metrics but does not attest corpus completeness, judgment quality, or that the claimed artifacts produced the supplied ranking.
 9. **Structured-output producer to evaluator.** Candidate values and schemas are untrusted. EvalForge permits only a bounded, reference-free schema profile, approves the exact ordered schema catalog by digest, and emits value-redacted validation evidence; it does not prove that a schema captures the product's complete semantic contract.
 10. **Mutation-plan author to generator.** Mutation text, source-case references, and character positions are untrusted. EvalForge binds plans to normalized source suites, bounds cardinality and text, applies fixed deterministic operators, and re-derives artifact evidence; generated prompts remain sensitive controlled data.
+11. **Trend producer to evaluator.** The approved producer supplies precomputed scores and underlying gate verdicts. EvalForge enforces exact ordered dataset identity, stable suite and evaluator semantics, canonical increasing timestamps, and bounded values, but it does not attest that source evaluations ran or that their scores are honest.
 
 ## Threats and controls
 
@@ -75,6 +78,7 @@ flowchart LR
 | Forged, biased, or privacy-sensitive retrieval evidence | Approved retriever/corpus/index provenance, exact case accounting, bounded unique IDs, exact-fraction gates, document-ID-free reports | The producer and relevance judgments remain trusted; low-entropy IDs may be guessed from input digests; metrics do not prove corpus completeness or factuality |
 | Unsafe or privacy-sensitive structured-output validation | Reference-free bounded schema profile, exact schema-catalog approval, shared JSON limits, capped diagnostics, atomic report replacement, and value/path-redacted reports | Complex permitted schemas still consume bounded local CPU; digests of low-entropy schemas or values may be guessed; schema validity does not prove business correctness |
 | Forged, unsafe, or privacy-sensitive mutation datasets | Source-suite digest approval, strict operator parameters, bounded generated contracts, deterministic re-derivation, content-addressed campaign identity, and atomic artifact replacement | Plans can contain malicious or sensitive prompt text; deterministic operators do not prove attack coverage or model safety; artifacts intentionally contain source and generated prompts |
+| Forged or misleading cross-dataset trends | Approved producer digest, stable dataset/suite/evaluator identity, exact ordered coverage, canonical timestamps, fixed-point bounded weights and scores, exact rational aggregation, embedded policy/digest binding, complete-history drawdowns, strict latest underlying gates, and atomic artifacts | Plain digests are not signed attestations; a compromised producer can fabricate scores or verdicts, and weighted aggregation can hide product dimensions outside the configured catalog |
 | Supply-chain or CI tampering | Locked Python dependencies, immutable Action commit SHAs, least-privilege workflow permissions, build/test gates | PyPI, GitHub, or a dependency could still be compromised; no artifact signing/SBOM in v0.1.0 |
 | Path traversal or accidental file disclosure | CLI writes to explicit operator paths; container uses a fixed application directory and non-root user | The trusted local operator can choose destructive or sensitive paths; API does not accept arbitrary output paths |
 

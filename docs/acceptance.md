@@ -20,6 +20,7 @@ This page maps the release contract to executable evidence. A checked item means
 | Governed ranked retrieval evaluation | `tests/test_retrieval_evaluation.py`, `tests/test_cli_retrieval.py` | Verified |
 | Governed bounded structured-output evaluation | `tests/test_structured_output_evaluation.py`, `tests/test_cli_structured_output.py` | Verified |
 | Governed deterministic dataset mutation | `tests/test_dataset_mutations.py`, `tests/test_cli_dataset_mutations.py` | Verified |
+| Governed cross-dataset scorecards and trends | `tests/test_cross_dataset_trends.py`, `tests/test_cli_cross_dataset_trends.py` | Verified |
 
 Run the complete credential-free tracer bullet:
 
@@ -45,7 +46,7 @@ The release includes the deterministic core and the implemented local operations
 | M5 ranked retrieval evaluation | Complete |
 | M5 governed structured-output evaluation | Complete |
 | M5 dataset mutation and adversarial test-case generation | Complete |
-| Remaining M5 cross-dataset scorecards and trends | In progress |
+| M5 cross-dataset scorecards and long-horizon trends | Complete |
 | Basic local run dashboard | Complete |
 | Full regression analytics dashboard | Not implemented |
 | Authentication and multi-tenancy | Not implemented |

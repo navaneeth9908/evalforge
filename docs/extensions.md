@@ -58,6 +58,10 @@ All persisted or exchanged suite, policy, trace, and report formats carry an int
 
 Do not place secrets or raw sensitive findings in content-addressed identifiers or public evidence. Digests establish identity, not confidentiality.
 
+## Trend producers
+
+A trend producer should export only governed scores in `[0, 1]` with at most six decimal places and strict boolean release verdicts. Policies must use weights from `0.001` through `1000.0` in `0.001` increments and drawdown budgets with at most six decimal places. Give the producer an immutable revision and artifact digest, keep timestamps in canonical whole-second UTC, and preserve the policy's exact dataset order, dataset versions, suite digests, and evaluator-semantics versions at every checkpoint. Do not flatten histories assembled from different suite or evaluator semantics into one series; start a new policy/catalog instead. Trend artifacts embed the strict policy but must not contain prompts, candidate outputs, or full dataset lineage. Producer and input digests provide identity and integrity evidence, not authenticity, so approve the producer through an independently reviewed policy and protect source observations in controlled storage.
+
 ## Persistence adapters
 
 `RunRegistry` stores canonical suite and report JSON behind `EvalForgeService`. A replacement store should preserve:

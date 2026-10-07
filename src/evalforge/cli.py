@@ -37,6 +37,11 @@ from evalforge.contracts import (
     ToolTraceExpectation,
     TrajectoryPolicy,
 )
+from evalforge.cross_dataset_trends import (
+    CrossDatasetObservations,
+    CrossDatasetPolicy,
+    build_cross_dataset_trend_artifact,
+)
 from evalforge.dataset_mutations import MutationPlan, generate_mutation_artifact
 from evalforge.demo import run_synthetic_demo
 from evalforge.embedding_similarity import (
@@ -191,6 +196,8 @@ def _read_json(path: Path, *, label: str) -> object:
         "structured_output_policy": "structured-output policy is invalid or ambiguous",
         "mutation_suite": "mutation source suite is invalid or ambiguous",
         "mutation_plan": "mutation plan is invalid or ambiguous",
+        "trend_observations": "cross-dataset observations are invalid or ambiguous",
+        "trend_policy": "cross-dataset policy is invalid or ambiguous",
         "leakage_policy": "sensitive-data policy is invalid or ambiguous",
         "report": "report input is invalid or ambiguous",
     }
@@ -800,6 +807,71 @@ def mutate_dataset_command(
     typer.echo(f"Mutation artifact: {artifact_path}")
     typer.echo(f"Generated mutation cases: {generated_cases}")
     typer.echo(f"Mutation campaign ID: {campaign_id}")
+
+
+def _write_cross_dataset_trend_artifact(
+    observations_path: Path,
+    policy_path: Path,
+    artifact_path: Path,
+) -> tuple[float, str, bool] | str:
+    try:
+        raw_observations = _read_json(observations_path, label="trend_observations")
+        raw_policy = _read_json(policy_path, label="trend_policy")
+    except typer.BadParameter:
+        return "cross-dataset trend input is invalid or ambiguous"
+    try:
+        observations = CrossDatasetObservations.model_validate(raw_observations)
+        policy = CrossDatasetPolicy.model_validate(raw_policy)
+        artifact = build_cross_dataset_trend_artifact(observations, policy)
+        serialized = f"{artifact.model_dump_json(indent=2, exclude_none=True)}\n"
+    except (ValidationError, ValueError, TypeError):
+        return "cross-dataset trend input is invalid or ambiguous"
+
+    temporary_path: Path | None = None
+    try:
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{artifact_path.name}.",
+            suffix=".tmp",
+            dir=artifact_path.parent,
+            delete=False,
+        ) as destination:
+            temporary_path = Path(destination.name)
+            destination.write(serialized)
+        os.replace(temporary_path, artifact_path)
+    except OSError:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
+        return "cross-dataset trend artifact could not be written"
+    return (
+        artifact.report.overall.latest_score,
+        artifact.trend_analysis_id,
+        artifact.report.release_ready,
+    )
+
+
+@app.command("cross-dataset-trends")
+def cross_dataset_trends_command(
+    observations_path: Path,
+    policy_path: Path,
+    artifact_path: Annotated[Path, typer.Option()] = Path("reports/cross-dataset-trends.json"),
+) -> None:
+    """Analyze governed precomputed dataset scores across ordered UTC checkpoints."""
+    outcome = _write_cross_dataset_trend_artifact(observations_path, policy_path, artifact_path)
+    if isinstance(outcome, str):
+        raise typer.BadParameter(outcome)
+    latest_score, analysis_id, release_ready = outcome
+
+    typer.echo(f"Cross-dataset trend artifact: {artifact_path}")
+    typer.echo(f"Cross-dataset score: {latest_score:.2%}")
+    typer.echo(f"Trend analysis ID: {analysis_id}")
+    typer.echo(f"Trend gate: {'PASS' if release_ready else 'FAIL'}")
+    if not release_ready:
+        raise typer.Exit(code=1)
 
 
 @app.command("scan-leakage")

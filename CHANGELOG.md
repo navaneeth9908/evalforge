@@ -11,6 +11,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Ranked retrieval evaluation with governed retriever/corpus/index provenance, exact precision@k, recall@k, and MRR@k gates, redacted case evidence, and deterministic CLI artifacts.
 - Governed structured-output evaluation with an approved bounded Draft 2020-12 schema catalog, exact rational pass-rate gates, value-redacted diagnostics, and deterministic atomic CLI artifacts.
 - Deterministic dataset mutation with source-bound adversarial plans, reproducible prompt transformations, content-addressed campaign artifacts, and tamper-resistant generation evidence.
+- Governed cross-dataset scorecards and long-horizon trend analysis with exact ordered dataset identity, weighted scores, complete-history drawdowns, and atomic content-addressed CLI artifacts.
 
 ### Security
 

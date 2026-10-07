@@ -111,7 +111,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "M5 ranked retrieval evaluation | Complete" in acceptance
     assert "M5 governed structured-output evaluation | Complete" in acceptance
     assert "M5 dataset mutation and adversarial test-case generation | Complete" in acceptance
-    assert "Remaining M5 cross-dataset scorecards and trends | In progress" in acceptance
+    assert "M5 cross-dataset scorecards and long-horizon trends | Complete" in acceptance
 
     for example in (
         "code-harness-evidence.json",
@@ -121,17 +121,27 @@ def test_release_documentation_is_complete_and_truthful() -> None:
         "structured-output-evaluation.json",
         "structured-output-policy.json",
         "mutation-plan.json",
+        "cross-dataset-observations.json",
+        "cross-dataset-policy.json",
     ):
         assert (ROOT / "examples" / example).is_file()
         assert example in readme
     assert "EvalForge does not execute candidate code" in readme
     assert "evalforge mutate-dataset" in readme
+    assert "evalforge cross-dataset-trends" in readme
 
     roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
     assert "[x] Task-specific code evaluator" in roadmap
     assert "[x] Retrieval evaluator" in roadmap
     assert "[x] Structured-output evaluator beyond current contracts" in roadmap
     assert "[x] Dataset mutation and adversarial test-case generation" in roadmap
+    assert "[x] Cross-dataset scorecards and long-horizon trend analysis" in roadmap
+
+    architecture = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    assert "cross-dataset scorecard" in architecture.lower()
+    assert "latest underlying dataset gate" in architecture.lower()
+    assert "trend producer" in extensions.lower()
+    assert "score histories" in threat_model.lower()
 
     deployment = (ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
     assert "--factory evalforge.server:create_app_from_environment" in deployment
