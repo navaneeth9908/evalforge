@@ -4,6 +4,8 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-08
+
 ### Added
 
 - Governed precomputed-embedding evaluation with cosine similarity, Euclidean distance, immutable model provenance approval, content-redacted vector digests, and deterministic CLI evidence.
@@ -37,5 +39,6 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Sensitive-data findings and public summaries avoid copying matched values or candidate output.
 - Provider credentials are environment-only and transport failures are normalized to redacted errors.
 
-[Unreleased]: https://github.com/navaneeth9908/evalforge/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/navaneeth9908/evalforge/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/navaneeth9908/evalforge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/navaneeth9908/evalforge/releases/tag/v0.1.0

@@ -202,7 +202,7 @@ uv run --frozen uvicorn --factory evalforge.server:create_app_from_environment \
 ```
 
 The service has no built-in authentication or TLS and is intended for loopback/private CI use in
-v0.1.0. See the [deployment guide](docs/deployment.md) and [threat model](docs/threat-model.md)
+v0.2.0. See the [deployment guide](docs/deployment.md) and [threat model](docs/threat-model.md)
 before changing the bind address.
 
 ## Structured rubric judging
@@ -562,7 +562,7 @@ SHAs.
 - [Local and container deployment](docs/deployment.md)
 - [Threat model and trust boundaries](docs/threat-model.md)
 - [Provider, metric, schema, and persistence extensions](docs/extensions.md)
-- [v0.1.0 acceptance evidence and explicit limitations](docs/acceptance.md)
+- [v0.2.0 acceptance evidence and explicit limitations](docs/acceptance.md)
 - [Release history](CHANGELOG.md)
 - [Security policy and private reporting](SECURITY.md)
 

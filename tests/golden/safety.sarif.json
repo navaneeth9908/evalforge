@@ -7,7 +7,7 @@
         "driver": {
           "name": "EvalForge",
           "informationUri": "https://github.com/navaneeth9908/evalforge",
-          "semanticVersion": "0.1.0",
+          "semanticVersion": "0.2.0",
           "rules": [
             {
               "id": "evalforge.sensitive-data.api-key",

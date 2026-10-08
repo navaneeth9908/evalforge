@@ -76,8 +76,11 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
         "version"
     ]
+    from evalforge import __version__
+
+    assert version == __version__ == "0.2.0"
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert f"## [{version}] - 2026-09-27" in changelog
+    assert f"## [{version}] - 2026-10-08" in changelog
 
     threat_model = (ROOT / "docs" / "threat-model.md").read_text(encoding="utf-8")
     for term in (
@@ -102,6 +105,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "schema_version" in extensions
 
     acceptance = (ROOT / "docs" / "acceptance.md").read_text(encoding="utf-8")
+    assert acceptance.startswith("# v0.2.0 acceptance evidence\n")
     assert "tests/test_release_acceptance.py" in acceptance
     assert "Authentication and multi-tenancy | Not implemented" in acceptance
     assert "Full regression analytics dashboard | Not implemented" in acceptance
@@ -131,6 +135,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "evalforge cross-dataset-trends" in readme
 
     roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
+    assert "## v0.2.0 release scope" in roadmap
+    assert "## Post-v0.2.0 roadmap" in roadmap
     assert "[x] Task-specific code evaluator" in roadmap
     assert "[x] Retrieval evaluator" in roadmap
     assert "[x] Structured-output evaluator beyond current contracts" in roadmap

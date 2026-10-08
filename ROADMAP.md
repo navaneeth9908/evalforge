@@ -1,6 +1,6 @@
 # EvalForge roadmap
 
-EvalForge is a deterministic, vendor-neutral evaluation and release-gating toolkit for LLM and agent systems. This roadmap separates the verified `v0.1.0` release contract from later control-plane ambitions. Checked items have implementation and automated evidence; unchecked items are not release claims.
+EvalForge is a deterministic, vendor-neutral evaluation and release-gating toolkit for LLM and agent systems. This roadmap separates the verified `v0.2.0` release contract from later control-plane ambitions. Checked items have implementation and automated evidence; unchecked items are not release claims.
 
 ## Product principles
 
@@ -11,7 +11,7 @@ EvalForge is a deterministic, vendor-neutral evaluation and release-gating toolk
 - Reports are automation-friendly and privacy-conscious.
 - Human judgment is supported, not disguised as mathematical certainty.
 
-## v0.1.0 release scope
+## v0.1.0 foundational release scope
 
 ### M0 — contracts and CI
 
@@ -53,9 +53,9 @@ EvalForge is a deterministic, vendor-neutral evaluation and release-gating toolk
 
 The exact command and test mapping are in [docs/acceptance.md](docs/acceptance.md).
 
-## Post-v0.1.0 roadmap
+## v0.2.0 release scope
 
-These are intentionally open and are not prerequisites that the `v0.1.0` release pretends to satisfy.
+This release extends the deterministic core with governed, content-addressed evaluators. Every item below has implementation, adversarial tests, public contracts, and accepted CI evidence.
 
 ### M5 — richer evaluation catalog
 
@@ -65,6 +65,10 @@ These are intentionally open and are not prerequisites that the `v0.1.0` release
 - [x] Structured-output evaluator beyond current contracts
 - [x] Dataset mutation and adversarial test-case generation
 - [x] Cross-dataset scorecards and long-horizon trend analysis
+
+## Post-v0.2.0 roadmap
+
+These capabilities remain open and are not claims of the `v0.2.0` release.
 
 ### M6 — production control plane
 

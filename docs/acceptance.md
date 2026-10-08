@@ -1,4 +1,4 @@
-# v0.1.0 acceptance evidence
+# v0.2.0 acceptance evidence
 
 This page maps the release contract to executable evidence. A checked item means the behavior is implemented and covered by the cited automated test or command; it does not imply completion of future roadmap scope.
 
@@ -34,7 +34,7 @@ It generates `evaluation.json`, `evaluation.junit.xml`, `safety.sarif.json`, `da
 
 The release includes the deterministic core and the implemented local operations slice; it does not relabel future production capabilities as complete.
 
-| Roadmap commitment | v0.1.0 disposition |
+| Roadmap commitment | v0.2.0 disposition |
 |---|---|
 | M0 contracts and CI | Complete |
 | M1 deterministic offline evaluation | Complete |
@@ -53,7 +53,7 @@ The release includes the deterministic core and the implemented local operations
 | Production hosted control plane and distributed workers | Not implemented |
 | Artifact signing and SBOM publication | Not implemented |
 
-The open items are post-v0.1.0 roadmap work. They are listed as limitations in the [threat model](threat-model.md), not hidden behind a release-readiness claim.
+The open items are post-v0.2.0 roadmap work. They are listed as limitations in the [threat model](threat-model.md), not hidden behind a release-readiness claim.
 
 ## Release gate
 
@@ -66,6 +66,6 @@ A release candidate is acceptable only when all of the following are true on the
 5. the staged diff contains no secrets, private datasets, local databases, generated reports, or unsupported completion claims;
 6. an independent staged review has no security or logic blockers;
 7. `main` is pushed with the intended author attribution and GitHub Actions is green; and
-8. only then may the annotated `v0.1.0` tag and GitHub release be created.
+8. only then may the annotated `v0.2.0` tag and GitHub release be created.
 
 A missing Docker engine is reported separately; it is not silently represented as a passing local container runtime smoke.

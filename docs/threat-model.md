@@ -2,9 +2,9 @@
 
 ## Scope and deployment assumptions
 
-This threat model covers the v0.1.0 CLI, provider adapter, deterministic evaluators, SQLite run registry, FastAPI service, read-only run dashboard, CI exports, and container image. The supported default deployment is a single trusted operator on a local machine or private CI runner. The Compose example binds to loopback.
+This threat model covers the v0.2.0 CLI, provider adapter, deterministic evaluators, governed evaluation catalog, SQLite run registry, FastAPI service, read-only run dashboard, CI exports, and container image. The supported default deployment is a single trusted operator on a local machine or private CI runner. The Compose example binds to loopback.
 
-EvalForge v0.1.0 does **not** provide authentication, authorization, tenant isolation, TLS termination, distributed rate limiting, or encrypted database storage. An operator who exposes it beyond loopback must supply those controls with an authenticated reverse proxy and platform policy.
+EvalForge v0.2.0 does **not** provide authentication, authorization, tenant isolation, TLS termination, distributed rate limiting, or encrypted database storage. An operator who exposes it beyond loopback must supply those controls with an authenticated reverse proxy and platform policy.
 
 ## Assets
 
@@ -65,21 +65,21 @@ flowchart LR
 | Threat | Relevant controls | Residual risk |
 |---|---|---|
 | Malformed, ambiguous, deeply nested, or oversized JSON | Byte/depth/node/string/number limits; duplicate-key rejection; strict Pydantic models; finite numeric checks | A new parser or route can bypass shared limits unless contract tests cover it |
-| Denial of service through expensive regular expressions or oversized suites | Bounded regex grammar/length, finite model cardinality, bounded provider/report responses, and container concurrency/resource limits | API-wide body-size, processing-deadline, distributed rate-limit, and per-client quota controls are external in v0.1.0 |
+| Denial of service through expensive regular expressions or oversized suites | Bounded regex grammar/length, finite model cardinality, bounded provider/report responses, and container concurrency/resource limits | API-wide body-size, processing-deadline, distributed rate-limit, and per-client quota controls are external in v0.2.0 |
 | Prompt injection or malicious model output | Provider output is treated as data; deterministic metrics do not execute it; dashboard escapes metadata; reports avoid HTML interpretation | A human reviewer or downstream system can still be socially engineered by raw output it chooses to inspect |
 | Sensitive-data leakage into evidence | Deterministic leakage scanner; redacted finding metadata; summary/dashboard omit candidate text; SARIF avoids matched values | Pattern detection is not a complete DLP system and can miss novel secrets or produce false positives |
 | Credential disclosure | Environment-only provider credentials; generic `ProviderError`; no secret values in reports; repository secret scan | Environment and process inspection remain privileged local risks |
-| SSRF or provider endpoint abuse | Operator-supplied HTTP(S) origin rejects URL credentials/query/fragment; direct transport does not follow redirects; connect/read/overall deadlines and response bytes are bounded | HTTP remains supported for trusted local endpoints, and DNS/IP egress validation is external in v0.1.0 |
+| SSRF or provider endpoint abuse | Operator-supplied HTTP(S) origin rejects URL credentials/query/fragment; direct transport does not follow redirects; connect/read/overall deadlines and response bytes are bounded | HTTP remains supported for trusted local endpoints, and DNS/IP egress validation is external in v0.2.0 |
 | SQL injection or registry corruption | Parameterized SQLite statements; typed repository methods; deterministic IDs; transactions and schema checks | The local database is not protected from a user who can modify the file directly |
 | Cross-site scripting in the dashboard | HTML escaping, no candidate text, restrictive Content Security Policy, `nosniff`, no-store | The dashboard has no authentication; reverse-proxy headers and origin policy are deployment responsibilities |
-| Unauthorized evaluation or report access | Loopback-only Compose default and documented private-use assumption | Authentication and authorization are absent from v0.1.0 |
+| Unauthorized evaluation or report access | Loopback-only Compose default and documented private-use assumption | Authentication and authorization are absent from v0.2.0 |
 | False release approval | Fail-closed thresholds, exact evidence cardinality, strict integers, provenance digests, deterministic IDs, tests across gate failures | Deterministic metrics can be incomplete proxies for product quality; human review remains necessary |
 | Forged or incomplete code-test evidence | Approved producer/runtime provenance digest, exact ordered required-case accounting, blocking infrastructure outcomes, content-addressed candidate/evidence IDs | JSON evidence is not a signed execution attestation; producer compromise or weak sandboxing remains external |
 | Forged, biased, or privacy-sensitive retrieval evidence | Approved retriever/corpus/index provenance, exact case accounting, bounded unique IDs, exact-fraction gates, document-ID-free reports | The producer and relevance judgments remain trusted; low-entropy IDs may be guessed from input digests; metrics do not prove corpus completeness or factuality |
 | Unsafe or privacy-sensitive structured-output validation | Reference-free bounded schema profile, exact schema-catalog approval, shared JSON limits, capped diagnostics, atomic report replacement, and value/path-redacted reports | Complex permitted schemas still consume bounded local CPU; digests of low-entropy schemas or values may be guessed; schema validity does not prove business correctness |
 | Forged, unsafe, or privacy-sensitive mutation datasets | Source-suite digest approval, strict operator parameters, bounded generated contracts, deterministic re-derivation, content-addressed campaign identity, and atomic artifact replacement | Plans can contain malicious or sensitive prompt text; deterministic operators do not prove attack coverage or model safety; artifacts intentionally contain source and generated prompts |
 | Forged or misleading cross-dataset trends | Approved producer digest, stable dataset/suite/evaluator identity, exact ordered coverage, canonical timestamps, fixed-point bounded weights and scores, exact rational aggregation, embedded policy/digest binding, complete-history drawdowns, strict latest underlying gates, and atomic artifacts | Plain digests are not signed attestations; a compromised producer can fabricate scores or verdicts, and weighted aggregation can hide product dimensions outside the configured catalog |
-| Supply-chain or CI tampering | Locked Python dependencies, immutable Action commit SHAs, least-privilege workflow permissions, build/test gates | PyPI, GitHub, or a dependency could still be compromised; no artifact signing/SBOM in v0.1.0 |
+| Supply-chain or CI tampering | Locked Python dependencies, immutable Action commit SHAs, least-privilege workflow permissions, build/test gates | PyPI, GitHub, or a dependency could still be compromised; no artifact signing/SBOM in v0.2.0 |
 | Path traversal or accidental file disclosure | CLI writes to explicit operator paths; container uses a fixed application directory and non-root user | The trusted local operator can choose destructive or sensitive paths; API does not accept arbitrary output paths |
 
 ## Security invariants
@@ -99,7 +99,7 @@ flowchart LR
 - **Candidate-code execution:** not implemented by design. A trusted external harness must isolate untrusted code with network, filesystem, process, CPU, memory, and wall-time controls.
 - **Perfect safety detection:** deterministic patterns and metrics are evidence, not proof of safety or correctness.
 - **High availability:** SQLite and a single process target local and small-team workflows.
-- **Artifact signing and SBOM:** planned hardening beyond v0.1.0.
+- **Artifact signing and SBOM:** planned hardening beyond v0.2.0.
 
 ## Verification and review
 

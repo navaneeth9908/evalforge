@@ -78,7 +78,7 @@ Write contract tests against temporary storage before wiring a new database into
 
 ## API and dashboard extensions
 
-Treat every request as untrusted and every rendered field as attacker-controlled. Extend Pydantic request/response models first, keep validation errors generic, HTML-escape rendered values, and avoid returning raw candidate outputs from list or dashboard views. EvalForge v0.1.0 has no authentication or tenant isolation; do not expose it to an untrusted network without an authenticated reverse proxy and deployment-specific controls.
+Treat every request as untrusted and every rendered field as attacker-controlled. Extend Pydantic request/response models first, keep validation errors generic, HTML-escape rendered values, and avoid returning raw candidate outputs from list or dashboard views. EvalForge v0.2.0 has no authentication or tenant isolation; do not expose it to an untrusted network without an authenticated reverse proxy and deployment-specific controls.
 
 ## Extension verification checklist
 

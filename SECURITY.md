@@ -4,10 +4,11 @@
 
 | Version | Security updates |
 |---|---|
-| 0.1.x | Yes |
+| 0.2.x | Yes |
+| 0.1.x | No |
 | Earlier development snapshots | No |
 
-Until a newer line is released, fixes are applied to the latest `0.1.x` release and `main`.
+Fixes are applied to the latest `0.2.x` release and `main`.
 
 ## Reporting a vulnerability
 
@@ -27,7 +28,7 @@ Do not include live credentials, customer data, or destructive proof-of-concept 
 
 Read the [threat model](docs/threat-model.md) for assets, actors, data flows, trust boundaries, controls, and residual risks. In particular:
 
-- EvalForge v0.1.0 is designed for a trusted local operator or private CI runner.
+- EvalForge v0.2.0 is designed for a trusted local operator or private CI runner.
 - The API and dashboard have no built-in authentication, authorization, tenant isolation, or TLS.
 - The Compose example binds to `127.0.0.1`; do not change that for an untrusted network without an authenticated reverse proxy, TLS, request limits, and deployment-specific authorization.
 - SQLite files, reports, JUnit, SARIF, prompts, and candidate output can contain sensitive business evidence. Protect them with operating-system and CI artifact permissions.

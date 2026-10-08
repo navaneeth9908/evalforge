@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.1.0 supports a single-process local/private deployment. It does not include authentication, TLS, tenant isolation, or distributed scheduling. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment. It does not include authentication, TLS, tenant isolation, or distributed scheduling. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -69,7 +69,7 @@ If an operator chooses to place EvalForge behind a shared network, the surroundi
 - structured log redaction and monitoring; and
 - a deployment-specific recovery and incident response procedure.
 
-The repository does not claim those controls are built into v0.1.0. SQLite is appropriate for a trusted local process and CI evidence, not a horizontally scaled multi-writer service.
+The repository does not claim those controls are built into v0.2.0. SQLite is appropriate for a trusted local process and CI evidence, not a horizontally scaled multi-writer service.
 
 ## Verification
 

@@ -102,6 +102,7 @@ def test_sarif_export_matches_golden_schema_and_never_contains_raw_evidence() ->
     assert payload["version"] == "2.1.0"
     run = payload["runs"][0]
     assert run["tool"]["driver"]["name"] == "EvalForge"
+    assert run["tool"]["driver"]["semanticVersion"] == "0.2.0"
     assert [result["ruleId"] for result in run["results"]] == [
         "evalforge.sensitive-data.email-address",
         "evalforge.sensitive-data.api-key",

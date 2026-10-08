@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterable
 from xml.etree import ElementTree
 
+from evalforge import __version__
 from evalforge.contracts import (
     EvaluationReport,
     ResourceGateFailure,
@@ -243,7 +244,7 @@ def sensitive_data_report_to_sarif(report: SensitiveDataReport) -> str:
                     "driver": {
                         "name": "EvalForge",
                         "informationUri": "https://github.com/navaneeth9908/evalforge",
-                        "semanticVersion": "0.1.0",
+                        "semanticVersion": __version__,
                         "rules": rules,
                     }
                 },
