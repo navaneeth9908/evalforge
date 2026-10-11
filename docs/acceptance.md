@@ -21,6 +21,7 @@ This page maps the release contract to executable evidence. A checked item means
 | Governed bounded structured-output evaluation | `tests/test_structured_output_evaluation.py`, `tests/test_cli_structured_output.py` | Verified |
 | Governed deterministic dataset mutation | `tests/test_dataset_mutations.py`, `tests/test_cli_dataset_mutations.py` | Verified |
 | Governed cross-dataset scorecards and trends | `tests/test_cross_dataset_trends.py`, `tests/test_cli_cross_dataset_trends.py` | Verified |
+| Opt-in bearer authentication and role authorization foundation | `tests/test_auth.py`, authenticated server-factory cases in `tests/test_deployment.py` | Verified on `main`; tenant isolation pending |
 
 Run the complete credential-free tracer bullet:
 
@@ -49,7 +50,7 @@ The release includes the deterministic core and the implemented local operations
 | M5 cross-dataset scorecards and long-horizon trends | Complete |
 | Basic local run dashboard | Complete |
 | Full regression analytics dashboard | Not implemented |
-| Authentication and multi-tenancy | Not implemented |
+| Authentication and multi-tenancy | Partial on `main`: bearer authentication and reader/editor/admin authorization are implemented; tenant-scoped persistence is not |
 | Production hosted control plane and distributed workers | Not implemented |
 | Artifact signing and SBOM publication | Not implemented |
 

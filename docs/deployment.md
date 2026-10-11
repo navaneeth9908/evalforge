@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment. It does not include authentication, TLS, tenant isolation, or distributed scheduling. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication and role authorization, but not TLS, tenant-scoped storage, or distributed scheduling. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -54,6 +54,24 @@ docker compose down
 | Variable | Default | Purpose |
 |---|---|---|
 | `EVALFORGE_DATABASE_PATH` | `/var/lib/evalforge/evalforge.db` | Absolute writable SQLite file used by the API |
+| `EVALFORGE_ACCESS_CREDENTIALS` | unset | Optional JSON array of bearer credentials with `token`, `tenant_id`, and `role` (`reader`, `editor`, or `admin`) |
+
+When `EVALFORGE_ACCESS_CREDENTIALS` is unset, EvalForge preserves the trusted local v0.2.0 mode. When
+it is set, it must be a non-empty duplicate-key-free JSON array with at most 100 entries and no
+more than 16 levels of JSON nesting. Tokens must be 32–512 visible ASCII characters without
+whitespace, tenant IDs use lowercase letters, digits, and internal hyphens, and duplicate tokens fail
+startup. The process removes the configuration from its environment and retains only SHA-256 token
+digests in the initialized application. Factory initialization is serialized; repeated calls reuse that
+application, and attempts to change its database or access credentials are rejected so a consumed
+credential value cannot silently downgrade authentication. Failed initialization remains fail-closed
+for the process lifetime. Inject this value
+from a deployment secret manager; do not commit it, place it in Compose files, or pass it on a command
+line. Health remains public. Suite, evaluation, run, report, and dashboard routes require a bearer
+token; readers can inspect evidence, while editors and admins can also create suites and evaluations.
+
+This slice binds every authenticated principal to a tenant ID but does not yet scope persisted rows by
+that ID. Do not configure principals from mutually distrusting tenants in one process until the
+roadmap's tenant-isolation work is complete.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
@@ -61,8 +79,8 @@ Provider generation is a separate CLI path. Its environment variables are docume
 
 If an operator chooses to place EvalForge behind a shared network, the surrounding platform must provide:
 
-- TLS termination and authenticated identity;
-- authorization for suites, runs, reports, and the dashboard;
+- TLS termination and authenticated identity (or the opt-in bearer mode for a private deployment);
+- tenant isolation for suites, runs, reports, and the dashboard;
 - request rate, concurrency, and body-size limits at the edge;
 - egress restrictions for provider access;
 - database and artifact backup, encryption, retention, and access controls;

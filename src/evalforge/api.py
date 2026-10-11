@@ -6,11 +6,18 @@ from html import escape
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, Query, Request, status
+from fastapi import Depends, FastAPI, Query, Request, Security, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
+from evalforge.auth import (
+    AccessCredential,
+    AuthenticatedPrincipal,
+    AuthenticationError,
+    BearerAuthenticator,
+)
 from evalforge.contracts import (
     CandidateOutput,
     EvaluationReport,
@@ -52,11 +59,19 @@ class ErrorResponse(BaseModel):
 class APIError(Exception):
     """Internal control-flow exception containing only public-safe fields."""
 
-    def __init__(self, *, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.headers = headers
 
 
 class SuiteResponse(BaseModel):
@@ -216,18 +231,84 @@ def _dashboard_html(runs: tuple[RunSummary, ...]) -> str:
 """
 
 
-def create_app(database_path: Path) -> FastAPI:
-    """Create an isolated EvalForge API backed by local SQLite storage."""
+def create_app(
+    database_path: Path,
+    *,
+    access_credentials: tuple[AccessCredential, ...] | None = None,
+    access_authenticator: BearerAuthenticator | None = None,
+) -> FastAPI:
+    """Create an isolated API with optional fail-closed bearer access control."""
 
     registry = SQLiteRunRegistry(database_path)
     service = EvalForgeService(registry)
+    authenticator = access_authenticator
+    if authenticator is None and access_credentials is not None:
+        authenticator = BearerAuthenticator(access_credentials)
+    bearer_scheme = HTTPBearer(auto_error=False)
+    bearer_dependency = Security(bearer_scheme)
     app = FastAPI(title="EvalForge API", version="1.0.0")
     app.state.service = service
+
+    def bearer_authenticate(
+        credentials: HTTPAuthorizationCredentials | None = bearer_dependency,
+    ) -> AuthenticatedPrincipal:
+        if authenticator is None:  # pragma: no cover - only selected in authenticated mode
+            raise RuntimeError("bearer authenticator is not configured")
+        principal: AuthenticatedPrincipal | None = None
+        if credentials is not None:
+            scheme = credentials.scheme
+            token = credentials.credentials
+            del credentials
+            try:
+                principal = authenticator.authenticate(f"{scheme} {token}")
+            except AuthenticationError:
+                pass
+            finally:
+                del scheme
+                del token
+        if principal is None:
+            raise APIError(
+                status_code=401,
+                code="authentication_required",
+                message="authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return principal
+
+    def trusted_local_authenticate() -> AuthenticatedPrincipal:
+        return AuthenticatedPrincipal(tenant_id="local", role="admin")
+
+    authenticate = trusted_local_authenticate if authenticator is None else bearer_authenticate
+
+    authenticate_dependency = Depends(authenticate)
+
+    def require_read(
+        principal: AuthenticatedPrincipal = authenticate_dependency,
+    ) -> AuthenticatedPrincipal:
+        return principal
+
+    def require_write(
+        principal: AuthenticatedPrincipal = authenticate_dependency,
+    ) -> AuthenticatedPrincipal:
+        if principal.role == "reader":
+            raise APIError(
+                status_code=403,
+                code="permission_denied",
+                message="permission denied",
+            )
+        return principal
+
+    read_dependency = Depends(require_read)
+    write_dependency = Depends(require_write)
 
     @app.exception_handler(APIError)
     async def handle_api_error(_request: Request, exc: APIError) -> JSONResponse:
         payload = ErrorResponse(error=ErrorDetail(code=exc.code, message=exc.message))
-        return JSONResponse(status_code=exc.status_code, content=payload.model_dump(mode="json"))
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=payload.model_dump(mode="json"),
+            headers=exc.headers,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(
@@ -250,7 +331,9 @@ def create_app(database_path: Path) -> FastAPI:
         return HealthResponse(storage_schema_version=registry.diagnostics().schema_version)
 
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
-    def dashboard() -> HTMLResponse:
+    def dashboard(
+        _principal: AuthenticatedPrincipal = read_dependency,
+    ) -> HTMLResponse:
         response = HTMLResponse(_dashboard_html(service.list_runs(limit=100, offset=0)))
         response.headers["Cache-Control"] = "no-store"
         response.headers["Content-Security-Policy"] = (
@@ -267,7 +350,10 @@ def create_app(database_path: Path) -> FastAPI:
         status_code=status.HTTP_201_CREATED,
         tags=["suites"],
     )
-    def create_suite(suite: EvaluationSuite) -> SuiteResponse:
+    def create_suite(
+        suite: EvaluationSuite,
+        _principal: AuthenticatedPrincipal = write_dependency,
+    ) -> SuiteResponse:
         stored = service.create_suite(suite)
         return SuiteResponse(
             suite_id=stored.suite_id,
@@ -277,6 +363,7 @@ def create_app(database_path: Path) -> FastAPI:
 
     @app.get("/api/v1/suites", response_model=SuitePage, tags=["suites"])
     def list_suites(
+        _principal: AuthenticatedPrincipal = read_dependency,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
     ) -> SuitePage:
@@ -301,7 +388,10 @@ def create_app(database_path: Path) -> FastAPI:
         status_code=status.HTTP_201_CREATED,
         tags=["evaluations"],
     )
-    def create_evaluation(request: EvaluationRequest) -> EvaluationResponse:
+    def create_evaluation(
+        request: EvaluationRequest,
+        _principal: AuthenticatedPrincipal = write_dependency,
+    ) -> EvaluationResponse:
         try:
             stored = service.evaluate(
                 suite_id=request.suite_id,
@@ -326,6 +416,7 @@ def create_app(database_path: Path) -> FastAPI:
 
     @app.get("/api/v1/runs", response_model=RunPage, tags=["runs"])
     def list_runs(
+        _principal: AuthenticatedPrincipal = read_dependency,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
     ) -> RunPage:
@@ -340,7 +431,10 @@ def create_app(database_path: Path) -> FastAPI:
         )
 
     @app.get("/api/v1/runs/{run_id}", response_model=RunResponse, tags=["runs"])
-    def get_run(run_id: Sha256Digest) -> RunResponse:
+    def get_run(
+        run_id: Sha256Digest,
+        _principal: AuthenticatedPrincipal = read_dependency,
+    ) -> RunResponse:
         stored = service.get_run(run_id)
         if stored is None:
             raise APIError(
@@ -355,7 +449,10 @@ def create_app(database_path: Path) -> FastAPI:
         response_model=EvaluationReportResponse,
         tags=["reports"],
     )
-    def get_report(run_id: Sha256Digest) -> EvaluationReportResponse:
+    def get_report(
+        run_id: Sha256Digest,
+        _principal: AuthenticatedPrincipal = read_dependency,
+    ) -> EvaluationReportResponse:
         stored = service.get_run(run_id)
         if stored is None:
             raise APIError(

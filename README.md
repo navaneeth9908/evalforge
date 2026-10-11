@@ -81,7 +81,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and basic run dashboard are implemented; hosted multi-tenant operations, authentication, and a full regression analytics dashboard remain future work and are not presented as complete.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and basic run dashboard are implemented, and current development builds include an opt-in authentication and role-authorization foundation. Hosted multi-tenant isolation and a full regression analytics dashboard remain future work and are not presented as complete.
 
 ## Quick start
 
@@ -201,9 +201,12 @@ uv run --frozen uvicorn --factory evalforge.server:create_app_from_environment \
   --host 127.0.0.1 --port 8000
 ```
 
-The service has no built-in authentication or TLS and is intended for loopback/private CI use in
-v0.2.0. See the [deployment guide](docs/deployment.md) and [threat model](docs/threat-model.md)
-before changing the bind address.
+The tagged v0.2.0 service is intended for loopback/private CI use. Current development builds add
+opt-in bearer authentication and reader/editor/admin authorization; configure it with
+`EVALFORGE_ACCESS_CREDENTIALS` as documented in the [deployment guide](docs/deployment.md).
+Tenant-scoped storage and TLS are not yet implemented, so this remains a private deployment rather
+than an internet-facing multi-tenant service. See the [threat model](docs/threat-model.md) before
+changing the bind address.
 
 ## Structured rubric judging
 

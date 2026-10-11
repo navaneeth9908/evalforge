@@ -73,6 +73,8 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
 ### M6 — production control plane
 
 - [ ] Authentication, authorization, and tenant isolation
+  - [x] Opt-in bearer authentication with reader/editor/admin authorization and tenant-bound principals
+  - [ ] Tenant-scoped persistence and cross-tenant non-disclosure across suites, runs, reports, and dashboard views
 - [ ] Full analyst dashboard for run comparison, regressions, slices, evidence, and trend drill-down
 - [ ] Hosted API workers, queues, retries, and distributed execution
 - [ ] Postgres/object-storage adapters and retention controls

@@ -4,6 +4,14 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in bearer authentication with strict bounded environment configuration, redaction-safe failures, tenant-bound principals, and reader/editor/admin API authorization.
+
+### Security
+
+- Protected suite, evaluation, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Tenant-scoped storage is still pending and multi-tenant isolation is not yet claimed.
+
 ## [0.2.0] - 2026-10-08
 
 ### Added

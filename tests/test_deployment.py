@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -8,6 +9,63 @@ from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _exception_references_secret(error: BaseException, secret: str) -> bool:
+    def value_contains_secret(value: object, depth: int, seen: set[int]) -> bool:
+        if depth < 0 or id(value) in seen:
+            return False
+        seen.add(id(value))
+        if isinstance(value, str):
+            return secret in value
+        if isinstance(value, bytes):
+            return secret.encode() in value
+        if isinstance(value, dict):
+            return any(
+                value_contains_secret(item, depth - 1, seen)
+                for pair in value.items()
+                for item in pair
+            )
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return any(value_contains_secret(item, depth - 1, seen) for item in value)
+        if type(value).__module__.startswith(("evalforge", "pydantic")):
+            try:
+                attributes = vars(value)
+            except TypeError:
+                return False
+            return value_contains_secret(attributes, depth - 1, seen)
+        return False
+
+    pending: list[BaseException] = [error]
+    seen_errors: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen_errors:
+            continue
+        seen_errors.add(id(current))
+        traceback = current.__traceback__
+        while traceback is not None:
+            frame = traceback.tb_frame
+            module_name = str(frame.f_globals.get("__name__", ""))
+            if module_name.startswith("evalforge") and value_contains_secret(
+                frame.f_locals, 6, set()
+            ):
+                return True
+            traceback = traceback.tb_next
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return False
+
+
+@pytest.fixture(autouse=True)
+def isolate_server_factory_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evalforge import server
+
+    monkeypatch.setattr(server, "_configured_app", None)
+    monkeypatch.setattr(server, "_configured_database_path", None)
+    monkeypatch.setattr(server, "_access_configuration_failed", False)
 
 
 def test_server_factory_uses_absolute_database_path_from_environment(
@@ -35,12 +93,273 @@ def test_server_factory_rejects_ambiguous_database_paths(
     from evalforge.server import create_app_from_environment
 
     monkeypatch.chdir(tmp_path)
+    secret = "tenant-alpha-production-token-000001"
     monkeypatch.setenv("EVALFORGE_DATABASE_PATH", configured_path)
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps([{"token": secret, "tenant_id": "tenant-alpha", "role": "reader"}]),
+    )
 
-    with pytest.raises(RuntimeError, match="absolute path"):
+    with pytest.raises(RuntimeError, match="absolute path") as error:
         create_app_from_environment()
 
     assert not (tmp_path / "relative" / "evalforge.db").exists()
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+    assert not _exception_references_secret(error.value, secret)
+
+
+def test_server_factory_enables_environment_bearer_access_control(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge.server import create_app_from_environment
+
+    token = "tenant-alpha-production-token-000001"
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "authenticated.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps(
+            [
+                {
+                    "token": token,
+                    "tenant_id": "tenant-alpha",
+                    "role": "reader",
+                }
+            ]
+        ),
+    )
+
+    with TestClient(create_app_from_environment()) as client:
+        health = client.get("/api/v1/health")
+        missing = client.get("/api/v1/suites")
+        allowed = client.get(
+            "/api/v1/suites",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert health.status_code == 200
+    assert missing.status_code == 401
+    assert allowed.status_code == 200
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+
+
+def test_server_factory_reuses_consumed_bearer_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge.server import create_app_from_environment
+
+    token = "tenant-alpha-production-token-000001"
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "authenticated.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps([{"token": token, "tenant_id": "tenant-alpha", "role": "reader"}]),
+    )
+
+    with TestClient(create_app_from_environment()) as first_client:
+        assert first_client.get("/api/v1/suites").status_code == 401
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+
+    with TestClient(create_app_from_environment()) as second_client:
+        missing = second_client.get("/api/v1/suites")
+        allowed = second_client.get(
+            "/api/v1/suites",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert missing.status_code == 401
+    assert allowed.status_code == 200
+
+
+def test_server_factory_serializes_authentication_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge import server
+
+    token = "tenant-alpha-production-token-000001"
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "authenticated.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps([{"token": token, "tenant_id": "tenant-alpha", "role": "reader"}]),
+    )
+    real_create_app = server.create_app
+    first_create_entered = threading.Event()
+    release_first_create = threading.Event()
+    call_guard = threading.Lock()
+    create_calls = 0
+
+    def delayed_create_app(*args: object, **kwargs: object) -> object:
+        nonlocal create_calls
+        with call_guard:
+            create_calls += 1
+            call_number = create_calls
+        if call_number == 1:
+            first_create_entered.set()
+            assert release_first_create.wait(timeout=2)
+        return real_create_app(*args, **kwargs)
+
+    monkeypatch.setattr(server, "create_app", delayed_create_app)
+    apps: list[object] = []
+    errors: list[BaseException] = []
+
+    def build_app() -> None:
+        try:
+            apps.append(server.create_app_from_environment())
+        except BaseException as error:  # pragma: no cover - asserted below
+            errors.append(error)
+
+    first = threading.Thread(target=build_app)
+    second = threading.Thread(target=build_app)
+    first.start()
+    assert first_create_entered.wait(timeout=2)
+    second.start()
+    second.join(timeout=0.1)
+    second_waited_for_initialization = second.is_alive()
+    release_first_create.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert second_waited_for_initialization
+    assert errors == []
+    assert len(apps) == 2
+    assert apps[0] is apps[1]
+    with TestClient(apps[1]) as client:
+        assert client.get("/api/v1/suites").status_code == 401
+
+
+def test_server_factory_rejects_reconfiguration_after_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge.server import create_app_from_environment
+
+    first_token = "tenant-alpha-production-token-000001"
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "first.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps([{"token": first_token, "tenant_id": "tenant-alpha", "role": "reader"}]),
+    )
+    first_app = create_app_from_environment()
+
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "second.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps(
+            [
+                {
+                    "token": "tenant-beta-production-token-0000001",
+                    "tenant_id": "tenant-beta",
+                    "role": "admin",
+                }
+            ]
+        ),
+    )
+    with pytest.raises(RuntimeError, match="cannot change after initialization"):
+        create_app_from_environment()
+
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "first.db"))
+    assert create_app_from_environment() is first_app
+    with TestClient(first_app) as client:
+        assert client.get("/api/v1/suites").status_code == 401
+        assert (
+            client.get(
+                "/api/v1/suites", headers={"Authorization": f"Bearer {first_token}"}
+            ).status_code
+            == 200
+        )
+
+
+def test_server_factory_rejects_invalid_access_configuration_without_echo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge.server import create_app_from_environment
+
+    secret = "customer-secret-production-token-0001"
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "authenticated.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        f"[{json.dumps({'token': secret, 'tenant_id': 'INVALID TENANT', 'role': 'admin'})}]",
+    )
+
+    with pytest.raises(RuntimeError, match="access credential configuration is invalid") as error:
+        create_app_from_environment()
+
+    assert secret not in str(error.value)
+    assert error.value.__cause__ is None
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+    assert not _exception_references_secret(error.value, secret)
+
+
+def test_server_factory_does_not_retain_plaintext_when_app_construction_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge import server
+
+    secret = "tenant-alpha-production-token-000001"
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "authenticated.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps([{"token": secret, "tenant_id": "tenant-alpha", "role": "reader"}]),
+    )
+
+    def fail_app_construction(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(server, "create_app", fail_app_construction)
+    with pytest.raises(RuntimeError, match="database unavailable") as error:
+        server.create_app_from_environment()
+
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+    assert not _exception_references_secret(error.value, secret)
+
+
+def test_server_factory_remains_fail_closed_after_initialization_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge import server
+
+    token = "tenant-alpha-production-token-000001"
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "authenticated.db"))
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        json.dumps([{"token": token, "tenant_id": "tenant-alpha", "role": "reader"}]),
+    )
+    real_create_app = server.create_app
+
+    def interrupt_app_construction(*args: object, **kwargs: object) -> object:
+        raise KeyboardInterrupt("synthetic startup interruption")
+
+    monkeypatch.setattr(server, "create_app", interrupt_app_construction)
+    with pytest.raises(KeyboardInterrupt, match="synthetic startup interruption"):
+        server.create_app_from_environment()
+
+    monkeypatch.setattr(server, "create_app", real_create_app)
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+    with pytest.raises(RuntimeError, match="access credential configuration is invalid"):
+        server.create_app_from_environment()
+
+
+def test_server_factory_keeps_failed_access_configuration_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge.server import create_app_from_environment
+
+    monkeypatch.setenv("EVALFORGE_DATABASE_PATH", str(tmp_path / "authenticated.db"))
+    monkeypatch.setenv("EVALFORGE_ACCESS_CREDENTIALS", "not-json")
+
+    with pytest.raises(RuntimeError, match="access credential configuration is invalid"):
+        create_app_from_environment()
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
+
+    with pytest.raises(RuntimeError, match="access credential configuration is invalid"):
+        create_app_from_environment()
+
+    monkeypatch.setenv(
+        "EVALFORGE_ACCESS_CREDENTIALS",
+        '[{"token":"tenant-alpha-production-token-000001",'
+        '"tenant_id":"tenant-alpha","role":"reader"}]',
+    )
+    with pytest.raises(RuntimeError, match="access credential configuration is invalid"):
+        create_app_from_environment()
+    assert "EVALFORGE_ACCESS_CREDENTIALS" not in os.environ
 
 
 class _SmokeHandler(BaseHTTPRequestHandler):

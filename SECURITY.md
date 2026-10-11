@@ -29,14 +29,14 @@ Do not include live credentials, customer data, or destructive proof-of-concept 
 Read the [threat model](docs/threat-model.md) for assets, actors, data flows, trust boundaries, controls, and residual risks. In particular:
 
 - EvalForge v0.2.0 is designed for a trusted local operator or private CI runner.
-- The API and dashboard have no built-in authentication, authorization, tenant isolation, or TLS.
+- The v0.2.0 API and dashboard have no built-in access control. Current `main` adds opt-in bearer authentication and role authorization, but tenant-scoped persistence and TLS remain incomplete.
 - The Compose example binds to `127.0.0.1`; do not change that for an untrusted network without an authenticated reverse proxy, TLS, request limits, and deployment-specific authorization.
 - SQLite files, reports, JUnit, SARIF, prompts, and candidate output can contain sensitive business evidence. Protect them with operating-system and CI artifact permissions.
 - Provider output and user-authored policies are untrusted input. Deterministic scans reduce risk but do not prove safety.
 
 ## Secrets and privacy
 
-Provider credentials must be supplied only through environment variables. Never commit `.env` files, authorization headers, private keys, real customer prompts, candidate outputs, or raw sensitive-data matches. EvalForge intentionally emits category and location metadata instead of matched secrets in leakage reports.
+Provider credentials and access tokens must be supplied only through environment variables or a deployment secret manager. Never commit `.env` files, authorization headers, private keys, real customer prompts, candidate outputs, or raw sensitive-data matches. EvalForge intentionally emits category and location metadata instead of matched secrets in leakage reports.
 
 If exposure is suspected, revoke the credential first, preserve only redacted evidence, and then report the incident privately.
 
