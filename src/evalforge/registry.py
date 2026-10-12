@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from evalforge.auth import TRUSTED_LOCAL_TENANT_ID
 from evalforge.provenance import (
     JsonValue,
     canonical_json_bytes,
@@ -90,6 +91,78 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """,
             """
             CREATE TRIGGER reports_immutable_delete BEFORE DELETE ON reports
+            BEGIN SELECT RAISE(ABORT, 'report evidence is immutable'); END
+            """,
+        ),
+    ),
+    (
+        2,
+        (
+            """
+            CREATE TABLE tenant_suites (
+                tenant_id TEXT NOT NULL,
+                suite_id INTEGER NOT NULL REFERENCES suites(id),
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, suite_id)
+            ) WITHOUT ROWID
+            """,
+            """
+            INSERT INTO tenant_suites(tenant_id, suite_id, created_at)
+            SELECT '__local__', id, created_at FROM suites
+            """,
+            """
+            CREATE INDEX tenant_suites_page_idx
+            ON tenant_suites(tenant_id, created_at DESC, suite_id)
+            """,
+            """
+            CREATE TRIGGER tenant_suites_immutable_update BEFORE UPDATE ON tenant_suites
+            BEGIN SELECT RAISE(ABORT, 'tenant suite membership is immutable'); END
+            """,
+            """
+            CREATE TRIGGER tenant_suites_immutable_delete BEFORE DELETE ON tenant_suites
+            BEGIN SELECT RAISE(ABORT, 'tenant suite membership is immutable'); END
+            """,
+            """
+            CREATE TRIGGER tenant_suites_immutable_insert BEFORE INSERT ON tenant_suites
+            WHEN EXISTS (
+                SELECT 1 FROM tenant_suites AS existing
+                WHERE existing.tenant_id = NEW.tenant_id
+                  AND existing.suite_id = NEW.suite_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'tenant suite membership is immutable'); END
+            """,
+            """
+            CREATE TRIGGER suites_immutable_insert BEFORE INSERT ON suites
+            WHEN EXISTS (
+                SELECT 1 FROM suites AS existing
+                WHERE existing.id = NEW.id OR existing.digest = NEW.digest
+            )
+            BEGIN SELECT RAISE(ABORT, 'suite evidence is immutable'); END
+            """,
+            """
+            CREATE TRIGGER candidates_immutable_insert BEFORE INSERT ON candidates
+            WHEN EXISTS (
+                SELECT 1 FROM candidates AS existing
+                WHERE existing.id = NEW.id OR existing.digest = NEW.digest
+            )
+            BEGIN SELECT RAISE(ABORT, 'candidate evidence is immutable'); END
+            """,
+            """
+            CREATE TRIGGER runs_immutable_insert BEFORE INSERT ON runs
+            WHEN EXISTS (
+                SELECT 1 FROM runs AS existing
+                WHERE existing.run_id = NEW.run_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'run evidence is immutable'); END
+            """,
+            """
+            CREATE TRIGGER reports_immutable_insert BEFORE INSERT ON reports
+            WHEN EXISTS (
+                SELECT 1 FROM reports AS existing
+                WHERE existing.id = NEW.id
+                   OR existing.run_id = NEW.run_id
+                   OR existing.digest = NEW.digest
+            )
             BEGIN SELECT RAISE(ABORT, 'report evidence is immutable'); END
             """,
         ),
@@ -204,6 +277,11 @@ class SQLiteRunRegistry:
                 int(row["version"])
                 for row in connection.execute("SELECT version FROM schema_migrations")
             }
+            known_versions = {version for version, _statements in _MIGRATIONS}
+            if not applied <= known_versions or applied != set(
+                range(1, max(applied, default=0) + 1)
+            ):
+                raise RuntimeError("registry migration history is unsupported")
             for version, statements in _MIGRATIONS:
                 if version in applied:
                     continue
@@ -221,6 +299,7 @@ class SQLiteRunRegistry:
     def create_run(
         self,
         *,
+        tenant_id: str,
         suite_name: str,
         suite: JsonValue,
         candidate: JsonValue,
@@ -228,6 +307,7 @@ class SQLiteRunRegistry:
     ) -> StoredRun:
         """Atomically persist one evaluation and return its immutable stored form."""
 
+        _validate_tenant_id(tenant_id)
         suite_json = canonical_json_bytes(suite).decode("utf-8")
         candidate_json = canonical_json_bytes(candidate).decode("utf-8")
         report_json = canonical_json_bytes(report).decode("utf-8")
@@ -279,6 +359,12 @@ class SQLiteRunRegistry:
                 created_at=created_at,
                 name=suite_name,
             )
+            _insert_tenant_suite_membership(
+                connection,
+                tenant_id=tenant_id,
+                suite_id=suite_id,
+                created_at=created_at,
+            )
             candidate_id = _insert_evidence(
                 connection,
                 table="candidates",
@@ -286,24 +372,30 @@ class SQLiteRunRegistry:
                 payload_json=candidate_json,
                 created_at=created_at,
             )
-            connection.execute(
-                """
-                INSERT INTO runs(
-                    run_id, suite_id, candidate_id, dataset_manifest_digest, created_at
+            stored_run = connection.execute(
+                "SELECT 1 FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if stored_run is None:
+                connection.execute(
+                    """
+                    INSERT INTO runs(
+                        run_id, suite_id, candidate_id, dataset_manifest_digest, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (run_id, suite_id, candidate_id, dataset_manifest_sha256, created_at),
                 )
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO NOTHING
-                """,
-                (run_id, suite_id, candidate_id, dataset_manifest_sha256, created_at),
-            )
-            connection.execute(
-                """
-                INSERT INTO reports(run_id, digest, payload_json, release_ready, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO NOTHING
-                """,
-                (run_id, report_sha256, report_json, int(release_ready), created_at),
-            )
+            stored_report = connection.execute(
+                "SELECT 1 FROM reports WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if stored_report is None:
+                connection.execute(
+                    """
+                    INSERT INTO reports(run_id, digest, payload_json, release_ready, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (run_id, report_sha256, report_json, int(release_ready), created_at),
+                )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -323,9 +415,10 @@ class SQLiteRunRegistry:
             raise ValueError("run ID is already bound to different immutable evidence")
         return stored
 
-    def create_suite(self, *, name: str, suite: JsonValue) -> StoredSuite:
+    def create_suite(self, *, tenant_id: str, name: str, suite: JsonValue) -> StoredSuite:
         """Persist a suite idempotently by its canonical content digest."""
 
+        _validate_tenant_id(tenant_id)
         suite_object = _require_object(suite, label="suite")
         if not name.strip() or suite_object.get("name") != name:
             raise ValueError("suite name must match suite evidence")
@@ -335,7 +428,7 @@ class SQLiteRunRegistry:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            _insert_evidence(
+            stored_suite_id = _insert_evidence(
                 connection,
                 table="suites",
                 digest=suite_id,
@@ -343,25 +436,38 @@ class SQLiteRunRegistry:
                 created_at=created_at,
                 name=name,
             )
+            _insert_tenant_suite_membership(
+                connection,
+                tenant_id=tenant_id,
+                suite_id=stored_suite_id,
+                created_at=created_at,
+            )
             connection.commit()
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
-        stored = self.get_suite(suite_id)
+        stored = self.get_suite(tenant_id=tenant_id, suite_id=suite_id)
         if stored is None:
             raise RuntimeError("stored suite could not be read back")
         return stored
 
-    def get_suite(self, suite_id: str) -> StoredSuite | None:
+    def get_suite(self, *, tenant_id: str, suite_id: str) -> StoredSuite | None:
         """Read a suite by its canonical content digest."""
 
+        _validate_tenant_id(tenant_id)
         connection = self._connect()
         try:
             row = connection.execute(
-                "SELECT digest, name, payload_json, created_at FROM suites WHERE digest = ?",
-                (suite_id,),
+                """
+                SELECT suites.digest, suites.name, suites.payload_json,
+                       tenant_suites.created_at
+                FROM tenant_suites
+                JOIN suites ON suites.id = tenant_suites.suite_id
+                WHERE tenant_suites.tenant_id = ? AND suites.digest = ?
+                """,
+                (tenant_id, suite_id),
             ).fetchone()
         finally:
             connection.close()
@@ -374,20 +480,30 @@ class SQLiteRunRegistry:
             suite=cast(JsonValue, json.loads(str(row["payload_json"]))),
         )
 
-    def list_suites(self, *, limit: int = 100, offset: int = 0) -> tuple[StoredSuite, ...]:
+    def list_suites(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[StoredSuite, ...]:
         """List suites newest first using digest order as a stable tie break."""
 
+        _validate_tenant_id(tenant_id)
         _validate_page(limit=limit, offset=offset)
         connection = self._connect()
         try:
             rows = connection.execute(
                 """
-                SELECT digest, name, payload_json, created_at
-                FROM suites
-                ORDER BY created_at DESC, digest
+                SELECT suites.digest, suites.name, suites.payload_json,
+                       tenant_suites.created_at
+                FROM tenant_suites
+                JOIN suites ON suites.id = tenant_suites.suite_id
+                WHERE tenant_suites.tenant_id = ?
+                ORDER BY tenant_suites.created_at DESC, suites.digest
                 LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
+                (tenant_id, limit, offset),
             ).fetchall()
         finally:
             connection.close()
@@ -401,12 +517,18 @@ class SQLiteRunRegistry:
             for row in rows
         )
 
-    def count_suites(self) -> int:
+    def count_suites(self, *, tenant_id: str) -> int:
         """Return the number of immutable suite records."""
 
+        _validate_tenant_id(tenant_id)
         connection = self._connect()
         try:
-            return int(connection.execute("SELECT COUNT(*) FROM suites").fetchone()[0])
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM tenant_suites WHERE tenant_id = ?",
+                    (tenant_id,),
+                ).fetchone()[0]
+            )
         finally:
             connection.close()
 
@@ -499,36 +621,67 @@ def _insert_evidence(
     name: str | None = None,
 ) -> int:
     if table == "suites":
-        connection.execute(
-            """
-            INSERT INTO suites(digest, name, payload_json, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(digest) DO NOTHING
-            """,
-            (digest, name, payload_json, created_at),
-        )
         row = connection.execute(
             "SELECT id, name, payload_json FROM suites WHERE digest = ?", (digest,)
         ).fetchone()
+        if row is None:
+            connection.execute(
+                """
+                INSERT INTO suites(digest, name, payload_json, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (digest, name, payload_json, created_at),
+            )
+            row = connection.execute(
+                "SELECT id, name, payload_json FROM suites WHERE digest = ?", (digest,)
+            ).fetchone()
         if row is None or row["name"] != name or row["payload_json"] != payload_json:
             raise ValueError("suite digest is already bound to different immutable evidence")
     elif table == "candidates":
-        connection.execute(
-            """
-            INSERT INTO candidates(digest, payload_json, created_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(digest) DO NOTHING
-            """,
-            (digest, payload_json, created_at),
-        )
         row = connection.execute(
             "SELECT id, payload_json FROM candidates WHERE digest = ?", (digest,)
         ).fetchone()
+        if row is None:
+            connection.execute(
+                """
+                INSERT INTO candidates(digest, payload_json, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (digest, payload_json, created_at),
+            )
+            row = connection.execute(
+                "SELECT id, payload_json FROM candidates WHERE digest = ?", (digest,)
+            ).fetchone()
         if row is None or row["payload_json"] != payload_json:
             raise ValueError("candidate digest is already bound to different immutable evidence")
     else:
         raise ValueError("unsupported evidence table")
     return int(row["id"])
+
+
+def _insert_tenant_suite_membership(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    suite_id: int,
+    created_at: str,
+) -> None:
+    existing = connection.execute(
+        """
+        SELECT 1 FROM tenant_suites
+        WHERE tenant_id = ? AND suite_id = ?
+        """,
+        (tenant_id, suite_id),
+    ).fetchone()
+    if existing is not None:
+        return
+    connection.execute(
+        """
+        INSERT INTO tenant_suites(tenant_id, suite_id, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (tenant_id, suite_id, created_at),
+    )
 
 
 def _stored_run(row: sqlite3.Row) -> StoredRun:
@@ -570,6 +723,20 @@ def _validate_page(*, limit: int, offset: int) -> None:
         raise ValueError("page limit must be an integer from 1 through 100")
     if type(offset) is not int or not 0 <= offset <= 10_000:
         raise ValueError("page offset must be an integer from 0 through 10000")
+
+
+def _validate_tenant_id(tenant_id: str) -> None:
+    if type(tenant_id) is not str:
+        raise ValueError("tenant ID is invalid")
+    if tenant_id == TRUSTED_LOCAL_TENANT_ID:
+        return
+    if (
+        not 1 <= len(tenant_id) <= 64
+        or not tenant_id[0].isalnum()
+        or not tenant_id[-1].isalnum()
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in tenant_id)
+    ):
+        raise ValueError("tenant ID is invalid")
 
 
 def _utc_now() -> str:

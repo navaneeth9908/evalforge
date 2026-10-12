@@ -108,9 +108,9 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert acceptance.startswith("# v0.2.0 acceptance evidence\n")
     assert "tests/test_release_acceptance.py" in acceptance
     assert (
-        "Authentication and multi-tenancy | Partial on `main`: bearer authentication and "
-        "reader/editor/admin authorization are implemented; tenant-scoped persistence is not"
-        in acceptance
+        "Authentication and multi-tenancy | Partial on `main`: bearer authentication, role "
+        "authorization, and tenant-scoped suite registration/listing/evaluation lookup are "
+        "implemented; run, report, and dashboard isolation remain pending" in acceptance
     )
     assert "Full regression analytics dashboard | Not implemented" in acceptance
     assert "M4 local operations and release hardening | Complete" in acceptance

@@ -4,7 +4,7 @@
 
 This threat model covers the v0.2.0 CLI, provider adapter, deterministic evaluators, governed evaluation catalog, SQLite run registry, FastAPI service, read-only run dashboard, CI exports, and container image. The supported default deployment is a single trusted operator on a local machine or private CI runner. The Compose example binds to loopback.
 
-EvalForge v0.2.0 does **not** provide authentication, authorization, tenant isolation, TLS termination, distributed rate limiting, or encrypted database storage. An operator who exposes it beyond loopback must supply those controls with an authenticated reverse proxy and platform policy.
+EvalForge v0.2.0 does **not** provide authentication, authorization, tenant isolation, TLS termination, distributed rate limiting, or encrypted database storage. Current `main` adds opt-in bearer authentication and tenant-scoped suite access, but run, report, and dashboard isolation is incomplete. An operator who exposes it beyond loopback must supply the remaining controls with an authenticated reverse proxy and platform policy.
 
 ## Assets
 
@@ -72,7 +72,7 @@ flowchart LR
 | SSRF or provider endpoint abuse | Operator-supplied HTTP(S) origin rejects URL credentials/query/fragment; direct transport does not follow redirects; connect/read/overall deadlines and response bytes are bounded | HTTP remains supported for trusted local endpoints, and DNS/IP egress validation is external in v0.2.0 |
 | SQL injection or registry corruption | Parameterized SQLite statements; typed repository methods; deterministic IDs; transactions and schema checks | The local database is not protected from a user who can modify the file directly |
 | Cross-site scripting in the dashboard | HTML escaping, no candidate text, restrictive Content Security Policy, `nosniff`, no-store; current `main` can require bearer authentication | Reverse-proxy headers, origin policy, and TLS are deployment responsibilities |
-| Unauthorized evaluation or report access | Loopback-only Compose default; current `main` offers opt-in bearer authentication, constant-time digest checks, generic failures, and reader/editor/admin authorization | Access control is disabled when configuration is absent; tenant IDs are not yet enforced by persistence queries |
+| Unauthorized evaluation or report access | Loopback-only Compose default; current `main` offers opt-in bearer authentication, constant-time digest checks, generic failures, reader/editor/admin authorization, tenant-filtered suite pages, and foreign-suite non-disclosure | Access control is disabled when configuration is absent; run, report, and dashboard persistence is not yet tenant-scoped |
 | False release approval | Fail-closed thresholds, exact evidence cardinality, strict integers, provenance digests, deterministic IDs, tests across gate failures | Deterministic metrics can be incomplete proxies for product quality; human review remains necessary |
 | Forged or incomplete code-test evidence | Approved producer/runtime provenance digest, exact ordered required-case accounting, blocking infrastructure outcomes, content-addressed candidate/evidence IDs | JSON evidence is not a signed execution attestation; producer compromise or weak sandboxing remains external |
 | Forged, biased, or privacy-sensitive retrieval evidence | Approved retriever/corpus/index provenance, exact case accounting, bounded unique IDs, exact-fraction gates, document-ID-free reports | The producer and relevance judgments remain trusted; low-entropy IDs may be guessed from input digests; metrics do not prove corpus completeness or factuality |
@@ -93,7 +93,7 @@ flowchart LR
 
 ## Residual risks and non-goals
 
-- **Authentication and multi-tenancy:** current `main` has an opt-in authentication and role-authorization foundation, but tenant-scoped persistence is not implemented. The API is not an internet-facing multi-tenant service.
+- **Authentication and multi-tenancy:** current `main` scopes suite registration, listing, totals, pagination, and evaluation lookup to the authenticated tenant. Runs, reports, and dashboard views remain global, so the API is not an internet-facing multi-tenant service.
 - **Encryption at rest:** not implemented. Protect the database and artifacts with OS and CI permissions.
 - **Sandboxing model output:** EvalForge does not execute model text, but it cannot control downstream consumers.
 - **Candidate-code execution:** not implemented by design. A trusted external harness must isolate untrusted code with network, filesystem, process, CPU, memory, and wall-time controls.

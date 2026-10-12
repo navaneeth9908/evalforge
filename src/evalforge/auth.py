@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 AccessRole = Literal["reader", "editor", "admin"]
+TRUSTED_LOCAL_TENANT_ID = "__local__"
 _MAX_ACCESS_CONFIGURATION_BYTES = 32_768
 _MAX_ACCESS_CREDENTIALS = 100
 _MAX_JSON_NESTING = 16

@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication and role authorization, but not TLS, tenant-scoped storage, or distributed scheduling. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, and tenant-scoped suite registration, listing, and evaluation lookup. Run, report, and dashboard persistence, TLS, and distributed scheduling remain incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -69,9 +69,16 @@ from a deployment secret manager; do not commit it, place it in Compose files, o
 line. Health remains public. Suite, evaluation, run, report, and dashboard routes require a bearer
 token; readers can inspect evidence, while editors and admins can also create suites and evaluations.
 
-This slice binds every authenticated principal to a tenant ID but does not yet scope persisted rows by
-that ID. Do not configure principals from mutually distrusting tenants in one process until the
-roadmap's tenant-isolation work is complete.
+Suite membership is scoped to the authenticated principal's tenant. Suite totals and pagination are
+filtered before response construction, and evaluation treats a foreign suite digest exactly like an
+absent digest. Canonical suite evidence remains globally content-addressed and may be independently
+registered by more than one tenant; each tenant receives its own membership timestamp. Existing
+schema-v1 suites migrate only to an internal trusted-local namespace, never to a configured tenant.
+Switching access modes does not transfer ownership, and rolling an upgraded database back to an
+older binary is unsupported without restoring a pre-migration backup.
+
+Runs, reports, and dashboard rows are not yet tenant-scoped. Do not configure principals from
+mutually distrusting tenants in one process until the remaining roadmap isolation work is complete.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 

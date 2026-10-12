@@ -29,7 +29,7 @@ Do not include live credentials, customer data, or destructive proof-of-concept 
 Read the [threat model](docs/threat-model.md) for assets, actors, data flows, trust boundaries, controls, and residual risks. In particular:
 
 - EvalForge v0.2.0 is designed for a trusted local operator or private CI runner.
-- The v0.2.0 API and dashboard have no built-in access control. Current `main` adds opt-in bearer authentication and role authorization, but tenant-scoped persistence and TLS remain incomplete.
+- The v0.2.0 API and dashboard have no built-in access control. Current `main` adds opt-in bearer authentication, role authorization, and tenant-scoped suite access. Run, report, and dashboard persistence plus TLS remain incomplete.
 - The Compose example binds to `127.0.0.1`; do not change that for an untrusted network without an authenticated reverse proxy, TLS, request limits, and deployment-specific authorization.
 - SQLite files, reports, JUnit, SARIF, prompts, and candidate output can contain sensitive business evidence. Protect them with operating-system and CI artifact permissions.
 - Provider output and user-authored policies are untrusted input. Deterministic scans reduce risk but do not prove safety.

@@ -32,26 +32,32 @@ class EvalForgeService:
     def __init__(self, registry: SQLiteRunRegistry) -> None:
         self.registry = registry
 
-    def create_suite(self, suite: EvaluationSuite) -> StoredSuite:
+    def create_suite(self, suite: EvaluationSuite, *, tenant_id: str) -> StoredSuite:
         """Persist one already-validated evaluation suite."""
 
         payload = cast(JsonValue, suite.model_dump(mode="json", exclude_none=True))
-        return self.registry.create_suite(name=suite.name, suite=payload)
+        return self.registry.create_suite(tenant_id=tenant_id, name=suite.name, suite=payload)
 
-    def list_suites(self, *, limit: int, offset: int) -> tuple[StoredSuite, ...]:
+    def list_suites(self, *, tenant_id: str, limit: int, offset: int) -> tuple[StoredSuite, ...]:
         """Page through stored suites."""
 
-        return self.registry.list_suites(limit=limit, offset=offset)
+        return self.registry.list_suites(tenant_id=tenant_id, limit=limit, offset=offset)
+
+    def count_suites(self, *, tenant_id: str) -> int:
+        """Count suites visible to one tenant."""
+
+        return self.registry.count_suites(tenant_id=tenant_id)
 
     def evaluate(
         self,
         *,
+        tenant_id: str,
         suite_id: str,
         candidate_outputs: Mapping[str, str | CandidateOutput],
     ) -> StoredRun:
         """Evaluate with the deterministic core and atomically persist its evidence."""
 
-        stored_suite = self.registry.get_suite(suite_id)
+        stored_suite = self.registry.get_suite(tenant_id=tenant_id, suite_id=suite_id)
         if stored_suite is None:
             raise SuiteNotFoundError("evaluation suite was not found")
         suite = EvaluationSuite.model_validate(stored_suite.suite)
@@ -92,6 +98,7 @@ class EvalForgeService:
             },
         )
         return self.registry.create_run(
+            tenant_id=tenant_id,
             suite_name=suite.name,
             suite=stored_suite.suite,
             candidate=candidate_payload,

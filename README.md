@@ -81,7 +81,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and basic run dashboard are implemented, and current development builds include an opt-in authentication and role-authorization foundation. Hosted multi-tenant isolation and a full regression analytics dashboard remain future work and are not presented as complete.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and basic run dashboard are implemented. Current development builds include opt-in authentication, role authorization, and tenant-scoped suite registration, listing, and evaluation lookup. Run, report, and dashboard isolation plus the full regression analytics dashboard remain future work and are not presented as complete.
 
 ## Quick start
 
@@ -202,11 +202,12 @@ uv run --frozen uvicorn --factory evalforge.server:create_app_from_environment \
 ```
 
 The tagged v0.2.0 service is intended for loopback/private CI use. Current development builds add
-opt-in bearer authentication and reader/editor/admin authorization; configure it with
-`EVALFORGE_ACCESS_CREDENTIALS` as documented in the [deployment guide](docs/deployment.md).
-Tenant-scoped storage and TLS are not yet implemented, so this remains a private deployment rather
-than an internet-facing multi-tenant service. See the [threat model](docs/threat-model.md) before
-changing the bind address.
+opt-in bearer authentication, reader/editor/admin authorization, and tenant-scoped suite
+registration, listing, and evaluation lookup; configure access with `EVALFORGE_ACCESS_CREDENTIALS`
+as documented in the [deployment guide](docs/deployment.md). Run, report, and dashboard persistence
+is not yet tenant-scoped, and TLS is not built in, so this remains a private deployment rather than
+an internet-facing multi-tenant service. See the [threat model](docs/threat-model.md) before changing
+the bind address.
 
 ## Structured rubric judging
 

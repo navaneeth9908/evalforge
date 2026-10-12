@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
 from evalforge.auth import (
+    TRUSTED_LOCAL_TENANT_ID,
     AccessCredential,
     AuthenticatedPrincipal,
     AuthenticationError,
@@ -276,7 +277,7 @@ def create_app(
         return principal
 
     def trusted_local_authenticate() -> AuthenticatedPrincipal:
-        return AuthenticatedPrincipal(tenant_id="local", role="admin")
+        return AuthenticatedPrincipal(tenant_id=TRUSTED_LOCAL_TENANT_ID, role="admin")
 
     authenticate = trusted_local_authenticate if authenticator is None else bearer_authenticate
 
@@ -352,9 +353,9 @@ def create_app(
     )
     def create_suite(
         suite: EvaluationSuite,
-        _principal: AuthenticatedPrincipal = write_dependency,
+        principal: AuthenticatedPrincipal = write_dependency,
     ) -> SuiteResponse:
-        stored = service.create_suite(suite)
+        stored = service.create_suite(suite, tenant_id=principal.tenant_id)
         return SuiteResponse(
             suite_id=stored.suite_id,
             created_at=stored.created_at,
@@ -363,7 +364,7 @@ def create_app(
 
     @app.get("/api/v1/suites", response_model=SuitePage, tags=["suites"])
     def list_suites(
-        _principal: AuthenticatedPrincipal = read_dependency,
+        principal: AuthenticatedPrincipal = read_dependency,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
     ) -> SuitePage:
@@ -373,13 +374,17 @@ def create_app(
                 created_at=stored.created_at,
                 suite=EvaluationSuite.model_validate(stored.suite),
             )
-            for stored in service.list_suites(limit=limit, offset=offset)
+            for stored in service.list_suites(
+                tenant_id=principal.tenant_id,
+                limit=limit,
+                offset=offset,
+            )
         )
         return SuitePage(
             items=items,
             limit=limit,
             offset=offset,
-            total=registry.count_suites(),
+            total=service.count_suites(tenant_id=principal.tenant_id),
         )
 
     @app.post(
@@ -390,10 +395,11 @@ def create_app(
     )
     def create_evaluation(
         request: EvaluationRequest,
-        _principal: AuthenticatedPrincipal = write_dependency,
+        principal: AuthenticatedPrincipal = write_dependency,
     ) -> EvaluationResponse:
         try:
             stored = service.evaluate(
+                tenant_id=principal.tenant_id,
                 suite_id=request.suite_id,
                 candidate_outputs=request.candidate_outputs,
             )
