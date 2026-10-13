@@ -167,6 +167,44 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        3,
+        (
+            """
+            CREATE TABLE tenant_runs (
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, run_id)
+            ) WITHOUT ROWID
+            """,
+            """
+            INSERT INTO tenant_runs(tenant_id, run_id, created_at)
+            SELECT '__local__', run_id, created_at FROM runs
+            """,
+            """
+            CREATE INDEX tenant_runs_page_idx
+            ON tenant_runs(tenant_id, created_at DESC, run_id)
+            """,
+            """
+            CREATE TRIGGER tenant_runs_immutable_update BEFORE UPDATE ON tenant_runs
+            BEGIN SELECT RAISE(ABORT, 'tenant run membership is immutable'); END
+            """,
+            """
+            CREATE TRIGGER tenant_runs_immutable_delete BEFORE DELETE ON tenant_runs
+            BEGIN SELECT RAISE(ABORT, 'tenant run membership is immutable'); END
+            """,
+            """
+            CREATE TRIGGER tenant_runs_immutable_insert BEFORE INSERT ON tenant_runs
+            WHEN EXISTS (
+                SELECT 1 FROM tenant_runs AS existing
+                WHERE existing.tenant_id = NEW.tenant_id
+                  AND existing.run_id = NEW.run_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'tenant run membership is immutable'); END
+            """,
+        ),
+    ),
 )
 
 
@@ -359,12 +397,6 @@ class SQLiteRunRegistry:
                 created_at=created_at,
                 name=suite_name,
             )
-            _insert_tenant_suite_membership(
-                connection,
-                tenant_id=tenant_id,
-                suite_id=suite_id,
-                created_at=created_at,
-            )
             candidate_id = _insert_evidence(
                 connection,
                 table="candidates",
@@ -396,6 +428,45 @@ class SQLiteRunRegistry:
                     """,
                     (run_id, report_sha256, report_json, int(release_ready), created_at),
                 )
+            stored_binding = connection.execute(
+                """
+                SELECT suites.digest AS suite_digest,
+                       candidates.digest AS candidate_digest,
+                       runs.dataset_manifest_digest,
+                       reports.digest AS report_digest,
+                       reports.payload_json AS report_json,
+                       reports.release_ready
+                FROM runs
+                JOIN suites ON suites.id = runs.suite_id
+                JOIN candidates ON candidates.id = runs.candidate_id
+                JOIN reports ON reports.run_id = runs.run_id
+                WHERE runs.run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if stored_binding is None:
+                raise RuntimeError("stored run could not be validated")
+            if (
+                stored_binding["suite_digest"] != suite_sha256
+                or stored_binding["candidate_digest"] != candidate_sha256
+                or stored_binding["report_digest"] != report_sha256
+                or stored_binding["dataset_manifest_digest"] != dataset_manifest_sha256
+                or stored_binding["report_json"] != report_json
+                or bool(stored_binding["release_ready"]) != release_ready
+            ):
+                raise ValueError("run ID is already bound to different immutable evidence")
+            _insert_tenant_suite_membership(
+                connection,
+                tenant_id=tenant_id,
+                suite_id=suite_id,
+                created_at=created_at,
+            )
+            _insert_tenant_run_membership(
+                connection,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                created_at=created_at,
+            )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -403,16 +474,9 @@ class SQLiteRunRegistry:
         finally:
             connection.close()
 
-        stored = self.get_run(run_id)
+        stored = self.get_run(tenant_id=tenant_id, run_id=run_id)
         if stored is None:
             raise RuntimeError("stored run could not be read back")
-        if (
-            stored.suite_sha256 != suite_sha256
-            or stored.candidate_sha256 != candidate_sha256
-            or stored.report_sha256 != report_sha256
-            or stored.dataset_manifest_sha256 != dataset_manifest_sha256
-        ):
-            raise ValueError("run ID is already bound to different immutable evidence")
         return stored
 
     def create_suite(self, *, tenant_id: str, name: str, suite: JsonValue) -> StoredSuite:
@@ -532,39 +596,55 @@ class SQLiteRunRegistry:
         finally:
             connection.close()
 
-    def get_run(self, run_id: str) -> StoredRun | None:
+    def get_run(self, *, tenant_id: str, run_id: str) -> StoredRun | None:
         """Read one run and all related evidence by deterministic ID."""
 
+        _validate_tenant_id(tenant_id)
         connection = self._connect()
         try:
-            row = connection.execute(_RUN_SELECT + " WHERE runs.run_id = ?", (run_id,)).fetchone()
+            row = connection.execute(
+                _RUN_SELECT + " WHERE tenant_runs.tenant_id = ? AND runs.run_id = ?",
+                (tenant_id, run_id),
+            ).fetchone()
         finally:
             connection.close()
         return None if row is None else _stored_run(row)
 
-    def list_runs(self, *, limit: int = 100, offset: int = 0) -> tuple[RunSummary, ...]:
+    def list_runs(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[RunSummary, ...]:
         """List newest history first with a deterministic run-ID tie break."""
 
-        if type(limit) is not int or not 1 <= limit <= 1_000:
-            raise ValueError("history limit must be an integer from 1 through 1000")
-        if type(offset) is not int or not 0 <= offset <= 10_000:
-            raise ValueError("history offset must be an integer from 0 through 10000")
+        _validate_tenant_id(tenant_id)
+        _validate_page(limit=limit, offset=offset)
         connection = self._connect()
         try:
             rows = connection.execute(
-                _RUN_SELECT + " ORDER BY runs.created_at DESC, runs.run_id LIMIT ? OFFSET ?",
-                (limit, offset),
+                _RUN_SELECT
+                + " WHERE tenant_runs.tenant_id = ?"
+                + " ORDER BY tenant_runs.created_at DESC, runs.run_id LIMIT ? OFFSET ?",
+                (tenant_id, limit, offset),
             ).fetchall()
         finally:
             connection.close()
         return tuple(_stored_run(row).summary() for row in rows)
 
-    def count_runs(self) -> int:
+    def count_runs(self, *, tenant_id: str) -> int:
         """Return the number of immutable evaluation runs."""
 
+        _validate_tenant_id(tenant_id)
         connection = self._connect()
         try:
-            return int(connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0])
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM tenant_runs WHERE tenant_id = ?",
+                    (tenant_id,),
+                ).fetchone()[0]
+            )
         finally:
             connection.close()
 
@@ -595,7 +675,7 @@ _RUN_SELECT = """
 SELECT
     runs.run_id,
     runs.dataset_manifest_digest,
-    runs.created_at,
+    tenant_runs.created_at,
     suites.digest AS suite_digest,
     suites.name AS suite_name,
     suites.payload_json AS suite_json,
@@ -605,6 +685,7 @@ SELECT
     reports.payload_json AS report_json,
     reports.release_ready
 FROM runs
+JOIN tenant_runs ON tenant_runs.run_id = runs.run_id
 JOIN suites ON suites.id = runs.suite_id
 JOIN candidates ON candidates.id = runs.candidate_id
 JOIN reports ON reports.run_id = runs.run_id
@@ -681,6 +762,31 @@ def _insert_tenant_suite_membership(
         VALUES (?, ?, ?)
         """,
         (tenant_id, suite_id, created_at),
+    )
+
+
+def _insert_tenant_run_membership(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    run_id: str,
+    created_at: str,
+) -> None:
+    existing = connection.execute(
+        """
+        SELECT 1 FROM tenant_runs
+        WHERE tenant_id = ? AND run_id = ?
+        """,
+        (tenant_id, run_id),
+    ).fetchone()
+    if existing is not None:
+        return
+    connection.execute(
+        """
+        INSERT INTO tenant_runs(tenant_id, run_id, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (tenant_id, run_id, created_at),
     )
 
 

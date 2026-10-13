@@ -101,3 +101,91 @@ def test_evaluation_treats_foreign_and_absent_suite_ids_identically(tmp_path: Pa
     }
     assert foreign.status_code == absent.status_code == 404
     assert foreign.json() == absent.json() == expected
+
+
+def test_run_report_and_dashboard_views_are_tenant_scoped(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.auth import AccessCredential
+
+    alpha_token = "tenant-alpha-editor-token-0000000001"
+    beta_token = "tenant-beta-editor-token-00000000001"
+    app = create_app(
+        tmp_path / "tenant-isolation.db",
+        access_credentials=(
+            AccessCredential(token=alpha_token, tenant_id="tenant-alpha", role="editor"),
+            AccessCredential(token=beta_token, tenant_id="tenant-beta", role="editor"),
+        ),
+    )
+
+    with TestClient(app) as client:
+        suite_payload = _suite("private-alpha-run")
+        alpha_suite = client.post(
+            "/api/v1/suites",
+            headers=_authorization(alpha_token),
+            json=suite_payload,
+        ).json()
+        alpha_run = client.post(
+            "/api/v1/evaluations",
+            headers=_authorization(alpha_token),
+            json={
+                "suite_id": alpha_suite["suite_id"],
+                "candidate_outputs": {"policy": "Denied"},
+            },
+        ).json()
+        run_id = alpha_run["run_id"]
+
+        beta_page = client.get("/api/v1/runs", headers=_authorization(beta_token))
+        beta_run = client.get(
+            f"/api/v1/runs/{run_id}",
+            headers=_authorization(beta_token),
+        )
+        beta_report = client.get(
+            f"/api/v1/reports/{run_id}",
+            headers=_authorization(beta_token),
+        )
+        absent_run = client.get(
+            f"/api/v1/runs/{'0' * 64}",
+            headers=_authorization(beta_token),
+        )
+        absent_report = client.get(
+            f"/api/v1/reports/{'0' * 64}",
+            headers=_authorization(beta_token),
+        )
+        beta_dashboard = client.get("/dashboard", headers=_authorization(beta_token))
+
+        beta_suite = client.post(
+            "/api/v1/suites",
+            headers=_authorization(beta_token),
+            json=suite_payload,
+        ).json()
+        beta_evaluation = client.post(
+            "/api/v1/evaluations",
+            headers=_authorization(beta_token),
+            json={
+                "suite_id": beta_suite["suite_id"],
+                "candidate_outputs": {"policy": "Denied"},
+            },
+        )
+        beta_visible_run = client.get(
+            f"/api/v1/runs/{run_id}",
+            headers=_authorization(beta_token),
+        )
+
+    assert beta_page.status_code == 200
+    assert beta_page.json() == {"items": [], "limit": 50, "offset": 0, "total": 0}
+    expected_run_error = {
+        "error": {"code": "run_not_found", "message": "evaluation run was not found"}
+    }
+    assert beta_run.status_code == absent_run.status_code == 404
+    assert beta_run.json() == absent_run.json() == expected_run_error
+    expected_report_error = {
+        "error": {"code": "report_not_found", "message": "evaluation report was not found"}
+    }
+    assert beta_report.status_code == absent_report.status_code == 404
+    assert beta_report.json() == absent_report.json() == expected_report_error
+    assert run_id not in beta_dashboard.text
+    assert "private-alpha-run" not in beta_dashboard.text
+    assert beta_evaluation.status_code == 201
+    assert beta_evaluation.json()["run_id"] == run_id
+    assert beta_visible_run.status_code == 200
+    assert beta_visible_run.json()["run_id"] == run_id

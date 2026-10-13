@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, and tenant-scoped suite registration, listing, and evaluation lookup. Run, report, and dashboard persistence, TLS, and distributed scheduling remain incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -77,8 +77,11 @@ schema-v1 suites migrate only to an internal trusted-local namespace, never to a
 Switching access modes does not transfer ownership, and rolling an upgraded database back to an
 older binary is unsupported without restoring a pre-migration backup.
 
-Runs, reports, and dashboard rows are not yet tenant-scoped. Do not configure principals from
-mutually distrusting tenants in one process until the remaining roadmap isolation work is complete.
+Run membership is also scoped to the authenticated tenant. Run pages, direct run and report reads,
+and dashboard rows filter through immutable tenant-to-run memberships before response construction.
+Foreign run IDs receive the same not-found envelopes as absent IDs. Identical content-addressed run
+evidence can be independently evaluated by multiple tenants without transferring membership or its
+timestamp. Existing schema-v2 runs migrate only to the trusted-local namespace.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
@@ -87,7 +90,7 @@ Provider generation is a separate CLI path. Its environment variables are docume
 If an operator chooses to place EvalForge behind a shared network, the surrounding platform must provide:
 
 - TLS termination and authenticated identity (or the opt-in bearer mode for a private deployment);
-- tenant isolation for suites, runs, reports, and the dashboard;
+- credential issuance, rotation, revocation, and tenant lifecycle controls;
 - request rate, concurrency, and body-size limits at the edge;
 - egress restrictions for provider access;
 - database and artifact backup, encryption, retention, and access controls;

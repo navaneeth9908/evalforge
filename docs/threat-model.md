@@ -4,7 +4,7 @@
 
 This threat model covers the v0.2.0 CLI, provider adapter, deterministic evaluators, governed evaluation catalog, SQLite run registry, FastAPI service, read-only run dashboard, CI exports, and container image. The supported default deployment is a single trusted operator on a local machine or private CI runner. The Compose example binds to loopback.
 
-EvalForge v0.2.0 does **not** provide authentication, authorization, tenant isolation, TLS termination, distributed rate limiting, or encrypted database storage. Current `main` adds opt-in bearer authentication and tenant-scoped suite access, but run, report, and dashboard isolation is incomplete. An operator who exposes it beyond loopback must supply the remaining controls with an authenticated reverse proxy and platform policy.
+EvalForge v0.2.0 does **not** provide authentication, authorization, tenant isolation, TLS termination, distributed rate limiting, or encrypted database storage. Current `main` adds opt-in bearer authentication plus tenant-scoped suite, run, report, and dashboard access. An operator who exposes it beyond loopback must still supply TLS, credential lifecycle controls, request limits, encrypted storage, and platform policy.
 
 ## Assets
 
@@ -72,7 +72,7 @@ flowchart LR
 | SSRF or provider endpoint abuse | Operator-supplied HTTP(S) origin rejects URL credentials/query/fragment; direct transport does not follow redirects; connect/read/overall deadlines and response bytes are bounded | HTTP remains supported for trusted local endpoints, and DNS/IP egress validation is external in v0.2.0 |
 | SQL injection or registry corruption | Parameterized SQLite statements; typed repository methods; deterministic IDs; transactions and schema checks | The local database is not protected from a user who can modify the file directly |
 | Cross-site scripting in the dashboard | HTML escaping, no candidate text, restrictive Content Security Policy, `nosniff`, no-store; current `main` can require bearer authentication | Reverse-proxy headers, origin policy, and TLS are deployment responsibilities |
-| Unauthorized evaluation or report access | Loopback-only Compose default; current `main` offers opt-in bearer authentication, constant-time digest checks, generic failures, reader/editor/admin authorization, tenant-filtered suite pages, and foreign-suite non-disclosure | Access control is disabled when configuration is absent; run, report, and dashboard persistence is not yet tenant-scoped |
+| Unauthorized evaluation or report access | Loopback-only Compose default; current `main` offers opt-in bearer authentication, constant-time digest checks, generic failures, reader/editor/admin authorization, immutable tenant memberships, tenant-filtered suite/run/dashboard views, and foreign-resource non-disclosure | Access control is disabled when configuration is absent; static bearer configuration does not provide credential rotation, revocation, federation, quotas, or encrypted storage |
 | False release approval | Fail-closed thresholds, exact evidence cardinality, strict integers, provenance digests, deterministic IDs, tests across gate failures | Deterministic metrics can be incomplete proxies for product quality; human review remains necessary |
 | Forged or incomplete code-test evidence | Approved producer/runtime provenance digest, exact ordered required-case accounting, blocking infrastructure outcomes, content-addressed candidate/evidence IDs | JSON evidence is not a signed execution attestation; producer compromise or weak sandboxing remains external |
 | Forged, biased, or privacy-sensitive retrieval evidence | Approved retriever/corpus/index provenance, exact case accounting, bounded unique IDs, exact-fraction gates, document-ID-free reports | The producer and relevance judgments remain trusted; low-entropy IDs may be guessed from input digests; metrics do not prove corpus completeness or factuality |
@@ -93,7 +93,7 @@ flowchart LR
 
 ## Residual risks and non-goals
 
-- **Authentication and multi-tenancy:** current `main` scopes suite registration, listing, totals, pagination, and evaluation lookup to the authenticated tenant. Runs, reports, and dashboard views remain global, so the API is not an internet-facing multi-tenant service.
+- **Authentication and multi-tenancy:** current `main` scopes suite registration, evaluation, run/report reads, totals, pagination, and dashboard rows to the authenticated tenant. Static bearer credentials, SQLite, absent TLS, and external credential lifecycle controls still make this a private single-process deployment rather than an internet-facing multi-tenant service.
 - **Encryption at rest:** not implemented. Protect the database and artifacts with OS and CI permissions.
 - **Sandboxing model output:** EvalForge does not execute model text, but it cannot control downstream consumers.
 - **Candidate-code execution:** not implemented by design. A trusted external harness must isolate untrusted code with network, filesystem, process, CPU, memory, and wall-time controls.

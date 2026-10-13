@@ -333,9 +333,11 @@ def create_app(
 
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
     def dashboard(
-        _principal: AuthenticatedPrincipal = read_dependency,
+        principal: AuthenticatedPrincipal = read_dependency,
     ) -> HTMLResponse:
-        response = HTMLResponse(_dashboard_html(service.list_runs(limit=100, offset=0)))
+        response = HTMLResponse(
+            _dashboard_html(service.list_runs(tenant_id=principal.tenant_id, limit=100, offset=0))
+        )
         response.headers["Cache-Control"] = "no-store"
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; "
@@ -422,26 +424,30 @@ def create_app(
 
     @app.get("/api/v1/runs", response_model=RunPage, tags=["runs"])
     def list_runs(
-        _principal: AuthenticatedPrincipal = read_dependency,
+        principal: AuthenticatedPrincipal = read_dependency,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
     ) -> RunPage:
         return RunPage(
             items=tuple(
                 _run_summary_response(summary)
-                for summary in service.list_runs(limit=limit, offset=offset)
+                for summary in service.list_runs(
+                    tenant_id=principal.tenant_id,
+                    limit=limit,
+                    offset=offset,
+                )
             ),
             limit=limit,
             offset=offset,
-            total=registry.count_runs(),
+            total=registry.count_runs(tenant_id=principal.tenant_id),
         )
 
     @app.get("/api/v1/runs/{run_id}", response_model=RunResponse, tags=["runs"])
     def get_run(
         run_id: Sha256Digest,
-        _principal: AuthenticatedPrincipal = read_dependency,
+        principal: AuthenticatedPrincipal = read_dependency,
     ) -> RunResponse:
-        stored = service.get_run(run_id)
+        stored = service.get_run(tenant_id=principal.tenant_id, run_id=run_id)
         if stored is None:
             raise APIError(
                 status_code=404,
@@ -457,9 +463,9 @@ def create_app(
     )
     def get_report(
         run_id: Sha256Digest,
-        _principal: AuthenticatedPrincipal = read_dependency,
+        principal: AuthenticatedPrincipal = read_dependency,
     ) -> EvaluationReportResponse:
-        stored = service.get_run(run_id)
+        stored = service.get_run(tenant_id=principal.tenant_id, run_id=run_id)
         if stored is None:
             raise APIError(
                 status_code=404,

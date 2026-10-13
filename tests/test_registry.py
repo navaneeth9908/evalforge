@@ -55,8 +55,8 @@ def test_create_get_and_list_run_history_transactionally(tmp_path: Path) -> None
         candidate=candidate,
         report=report,
     )
-    loaded = registry.get_run(created.run_id)
-    listed = registry.list_runs()
+    loaded = registry.get_run(tenant_id="__local__", run_id=created.run_id)
+    listed = registry.list_runs(tenant_id="__local__")
 
     assert loaded == created
     assert loaded is not None
@@ -145,7 +145,7 @@ def test_registry_applies_migrations_and_safe_connection_defaults(tmp_path: Path
     registry = SQLiteRunRegistry(tmp_path / "history.db")
 
     diagnostics = registry.diagnostics()
-    assert diagnostics.schema_version == 2
+    assert diagnostics.schema_version == 3
     assert diagnostics.foreign_keys is True
     assert diagnostics.journal_mode == "wal"
     assert diagnostics.busy_timeout_ms == 5_000
@@ -166,6 +166,7 @@ def test_registry_applies_migrations_and_safe_connection_defaults(tmp_path: Path
         "schema_migrations",
         "suites",
         "tenant_suites",
+        "tenant_runs",
         "candidates",
         "runs",
         "reports",
@@ -186,6 +187,9 @@ def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
     suite, _candidate, _report = _evaluation_payloads()
     suite_id = canonical_json_sha256(suite)
     with sqlite3.connect(path) as connection:
+        connection.execute("DROP INDEX tenant_runs_page_idx")
+        connection.execute("DROP TABLE tenant_runs")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 3")
         connection.execute("DROP TRIGGER suites_immutable_insert")
         connection.execute("DROP TRIGGER candidates_immutable_insert")
         connection.execute("DROP TRIGGER runs_immutable_insert")
@@ -210,11 +214,48 @@ def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
 
     migrated = SQLiteRunRegistry(path)
 
-    assert migrated.diagnostics().schema_version == 2
+    assert migrated.diagnostics().schema_version == 3
     assert migrated.get_suite(tenant_id=TRUSTED_LOCAL_TENANT_ID, suite_id=suite_id) is not None
     assert migrated.get_suite(tenant_id="tenant-alpha", suite_id=suite_id) is None
     assert migrated.count_suites(tenant_id=TRUSTED_LOCAL_TENANT_ID) == 1
-    assert SQLiteRunRegistry(path).diagnostics().schema_version == 2
+    assert SQLiteRunRegistry(path).diagnostics().schema_version == 3
+
+
+def test_v2_registry_migration_assigns_legacy_runs_only_to_trusted_local(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    from evalforge.auth import TRUSTED_LOCAL_TENANT_ID
+    from evalforge.registry import SQLiteRunRegistry
+
+    path = tmp_path / "legacy-runs.db"
+    registry = SQLiteRunRegistry(path)
+    suite, candidate, report = _evaluation_payloads()
+    created = registry.create_run(
+        tenant_id=TRUSTED_LOCAL_TENANT_ID,
+        suite_name="registry-smoke",
+        suite=suite,
+        candidate=candidate,
+        report=report,
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP INDEX tenant_runs_page_idx")
+        connection.execute("DROP TABLE tenant_runs")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+
+    migrated = SQLiteRunRegistry(path)
+
+    assert migrated.diagnostics().schema_version == 3
+    assert (
+        migrated.get_run(
+            tenant_id=TRUSTED_LOCAL_TENANT_ID,
+            run_id=created.run_id,
+        )
+        is not None
+    )
+    assert migrated.get_run(tenant_id="tenant-alpha", run_id=created.run_id) is None
+    assert migrated.count_runs(tenant_id=TRUSTED_LOCAL_TENANT_ID) == 1
 
 
 def test_identical_suite_content_has_independent_tenant_memberships(
@@ -307,6 +348,68 @@ def test_tenant_suite_membership_is_database_immutable(tmp_path: Path, statement
         connection.execute(statement)
 
 
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "UPDATE tenant_runs SET created_at = 'tampered'",
+        "DELETE FROM tenant_runs",
+        """
+        INSERT OR REPLACE INTO tenant_runs(tenant_id, run_id, created_at)
+        SELECT tenant_id, run_id, 'tampered' FROM tenant_runs LIMIT 1
+        """,
+    ),
+)
+def test_tenant_run_membership_is_database_immutable(tmp_path: Path, statement: str) -> None:
+    import sqlite3
+
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, candidate, report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "run-memberships.db")
+    registry.create_run(
+        tenant_id="tenant-alpha",
+        suite_name="registry-smoke",
+        suite=suite,
+        candidate=candidate,
+        report=report,
+    )
+
+    with (
+        sqlite3.connect(registry.path) as connection,
+        pytest.raises(sqlite3.IntegrityError, match="immutable"),
+    ):
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(statement)
+
+
+def test_rejected_cross_tenant_run_collision_does_not_grant_membership(tmp_path: Path) -> None:
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, candidate, report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "run-collision.db")
+    created = registry.create_run(
+        tenant_id="tenant-alpha",
+        suite_name="registry-smoke",
+        suite=suite,
+        candidate=candidate,
+        report=report,
+    )
+    altered_report = {**report, "release_ready": False}
+
+    with pytest.raises(ValueError, match="different immutable evidence"):
+        registry.create_run(
+            tenant_id="tenant-beta",
+            suite_name="registry-smoke",
+            suite=suite,
+            candidate=candidate,
+            report=altered_report,
+        )
+
+    assert registry.count_suites(tenant_id="tenant-beta") == 0
+    assert registry.count_runs(tenant_id="tenant-beta") == 0
+    assert registry.get_run(tenant_id="tenant-beta", run_id=created.run_id) is None
+
+
 def test_suite_evidence_cannot_be_replaced_and_retarget_tenant_membership(
     tmp_path: Path,
 ) -> None:
@@ -361,7 +464,7 @@ def test_create_run_rejects_a_run_id_not_derived_from_its_evidence(tmp_path: Pat
             candidate=candidate,
             report=report,
         )
-    assert registry.list_runs() == ()
+    assert registry.list_runs(tenant_id="__local__") == ()
 
 
 def test_create_run_rejects_suite_name_metadata_mismatch(tmp_path: Path) -> None:

@@ -105,12 +105,18 @@ class EvalForgeService:
             report=report_payload,
         )
 
-    def list_runs(self, *, limit: int, offset: int) -> tuple[RunSummary, ...]:
+    def list_runs(
+        self,
+        *,
+        tenant_id: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[RunSummary, ...]:
         """Page through compact run history."""
 
-        return self.registry.list_runs(limit=limit, offset=offset)
+        return self.registry.list_runs(tenant_id=tenant_id, limit=limit, offset=offset)
 
-    def get_run(self, run_id: str) -> StoredRun | None:
+    def get_run(self, *, tenant_id: str, run_id: str) -> StoredRun | None:
         """Load one run and its complete immutable evidence."""
 
-        return self.registry.get_run(run_id)
+        return self.registry.get_run(tenant_id=tenant_id, run_id=run_id)

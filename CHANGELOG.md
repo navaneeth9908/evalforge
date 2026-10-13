@@ -8,10 +8,11 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 
 - Opt-in bearer authentication with strict bounded environment configuration, redaction-safe failures, tenant-bound principals, and reader/editor/admin API authorization.
 - Immutable tenant-to-suite memberships with tenant-filtered registration, listing, pagination, totals, and evaluation lookup.
+- Immutable tenant-to-run memberships with tenant-filtered run pages, report retrieval, and dashboard rows.
 
 ### Security
 
-- Protected suite, evaluation, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Foreign suite digests are indistinguishable from absent digests, and legacy suites migrate only to trusted-local ownership. Run, report, and dashboard isolation is still pending, so complete multi-tenant isolation is not yet claimed.
+- Protected suite, evaluation, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Foreign suite and run identifiers are indistinguishable from absent identifiers. Legacy suites and runs migrate only to trusted-local ownership.
 
 ## [0.2.0] - 2026-10-08
 
