@@ -22,6 +22,9 @@ from evalforge.contracts import (
     ModelMatrixRow,
     RegressionBudgetFailure,
     ReleasePolicy,
+    ReportScoreComparison,
+    SliceComparison,
+    SliceSummary,
 )
 from evalforge.engine import evaluate_suite, registered_metrics
 
@@ -48,6 +51,117 @@ def _metric_means(report: EvaluationReport) -> dict[MetricName, float]:
             total_weight = sum(result.weight for result in results)
             means[metric] = sum(result.score * result.weight for result in results) / total_weight
     return means
+
+
+def _slice_deltas(
+    baseline: tuple[SliceSummary, ...],
+    candidate: tuple[SliceSummary, ...],
+) -> tuple[SliceComparison, ...]:
+    if [item.name for item in baseline] != [item.name for item in candidate]:
+        raise ValueError("evaluation report slices must be aligned")
+    return tuple(
+        SliceComparison(
+            name=baseline_slice.name,
+            baseline_score=baseline_slice.weighted_pass_rate,
+            candidate_score=candidate_slice.weighted_pass_rate,
+            absolute_delta=(candidate_slice.weighted_pass_rate - baseline_slice.weighted_pass_rate),
+            relative_delta=_relative_delta(
+                baseline_slice.weighted_pass_rate,
+                candidate_slice.weighted_pass_rate,
+            ),
+            status=_status(
+                baseline_slice.weighted_pass_rate,
+                candidate_slice.weighted_pass_rate,
+            ),
+        )
+        for baseline_slice, candidate_slice in zip(baseline, candidate, strict=True)
+    )
+
+
+def compare_report_scores(
+    baseline: EvaluationReport,
+    candidate: EvaluationReport,
+) -> ReportScoreComparison:
+    """Compare compatible reports while projecting no candidate or expected text."""
+
+    baseline_dimensions = tuple(
+        (
+            result.case_id,
+            result.metric,
+            result.threshold,
+            result.threshold_source,
+            result.weight,
+            result.severity,
+            result.category,
+            result.tags,
+        )
+        for result in baseline.results
+    )
+    candidate_dimensions = tuple(
+        (
+            result.case_id,
+            result.metric,
+            result.threshold,
+            result.threshold_source,
+            result.weight,
+            result.severity,
+            result.category,
+            result.tags,
+        )
+        for result in candidate.results
+    )
+    if baseline_dimensions != candidate_dimensions:
+        raise ValueError("evaluation report cases must be aligned")
+
+    case_deltas = tuple(
+        CaseComparison(
+            case_id=baseline_result.case_id,
+            metric=baseline_result.metric,
+            baseline_score=baseline_result.score,
+            candidate_score=candidate_result.score,
+            absolute_delta=candidate_result.score - baseline_result.score,
+            relative_delta=_relative_delta(baseline_result.score, candidate_result.score),
+            status=_status(baseline_result.score, candidate_result.score),
+        )
+        for baseline_result, candidate_result in zip(
+            baseline.results, candidate.results, strict=True
+        )
+    )
+    baseline_metrics = _metric_means(baseline)
+    candidate_metrics = _metric_means(candidate)
+    if baseline_metrics.keys() != candidate_metrics.keys():
+        raise ValueError("evaluation report metrics must be aligned")
+    metric_deltas = tuple(
+        MetricComparison(
+            metric=metric,
+            case_count=sum(result.metric == metric for result in baseline.results),
+            baseline_score=baseline_metrics[metric],
+            candidate_score=candidate_metrics[metric],
+            absolute_delta=candidate_metrics[metric] - baseline_metrics[metric],
+            relative_delta=_relative_delta(baseline_metrics[metric], candidate_metrics[metric]),
+            status=_status(baseline_metrics[metric], candidate_metrics[metric]),
+        )
+        for metric in registered_metrics()
+        if metric in baseline_metrics
+    )
+    return ReportScoreComparison(
+        weighted_pass_rate_absolute_delta=(
+            candidate.weighted_pass_rate - baseline.weighted_pass_rate
+        ),
+        weighted_pass_rate_relative_delta=_relative_delta(
+            baseline.weighted_pass_rate,
+            candidate.weighted_pass_rate,
+        ),
+        case_deltas=case_deltas,
+        metric_deltas=metric_deltas,
+        category_deltas=_slice_deltas(baseline.category_slices, candidate.category_slices),
+        tag_deltas=_slice_deltas(baseline.tag_slices, candidate.tag_slices),
+        ablation_summary=AblationSummary(
+            improved_cases=sum(delta.status == "improvement" for delta in case_deltas),
+            regressed_cases=sum(delta.status == "regression" for delta in case_deltas),
+            unchanged_cases=sum(delta.status == "unchanged" for delta in case_deltas),
+        ),
+    )
 
 
 def _budget_failure(
@@ -93,37 +207,7 @@ def compare_evaluations(
     """Evaluate two variants and compare their score evidence under regression budgets."""
     baseline = evaluate_suite(cases, baseline_outputs, policy=evaluation_policy)
     candidate = evaluate_suite(cases, candidate_outputs, policy=evaluation_policy)
-
-    case_deltas = tuple(
-        CaseComparison(
-            case_id=baseline_result.case_id,
-            metric=baseline_result.metric,
-            baseline_score=baseline_result.score,
-            candidate_score=candidate_result.score,
-            absolute_delta=candidate_result.score - baseline_result.score,
-            relative_delta=_relative_delta(baseline_result.score, candidate_result.score),
-            status=_status(baseline_result.score, candidate_result.score),
-        )
-        for baseline_result, candidate_result in zip(
-            baseline.results, candidate.results, strict=True
-        )
-    )
-
-    baseline_metrics = _metric_means(baseline)
-    candidate_metrics = _metric_means(candidate)
-    metric_deltas = tuple(
-        MetricComparison(
-            metric=metric,
-            case_count=sum(result.metric == metric for result in baseline.results),
-            baseline_score=baseline_metrics[metric],
-            candidate_score=candidate_metrics[metric],
-            absolute_delta=candidate_metrics[metric] - baseline_metrics[metric],
-            relative_delta=_relative_delta(baseline_metrics[metric], candidate_metrics[metric]),
-            status=_status(baseline_metrics[metric], candidate_metrics[metric]),
-        )
-        for metric in registered_metrics()
-        if metric in baseline_metrics
-    )
+    score_comparison = compare_report_scores(baseline, candidate)
 
     failures: list[RegressionBudgetFailure] = []
     overall_failure = _budget_failure(
@@ -135,7 +219,7 @@ def compare_evaluations(
     )
     if overall_failure is not None:
         failures.append(overall_failure)
-    for delta in metric_deltas:
+    for delta in score_comparison.metric_deltas:
         failure = _budget_failure(
             scope="metric",
             metric=delta.metric,
@@ -164,23 +248,15 @@ def compare_evaluations(
         candidate_label=candidate_label,
         baseline=baseline,
         candidate=candidate,
-        weighted_pass_rate_absolute_delta=(
-            candidate.weighted_pass_rate - baseline.weighted_pass_rate
-        ),
-        weighted_pass_rate_relative_delta=_relative_delta(
-            baseline.weighted_pass_rate, candidate.weighted_pass_rate
-        ),
-        case_deltas=case_deltas,
-        metric_deltas=metric_deltas,
+        weighted_pass_rate_absolute_delta=score_comparison.weighted_pass_rate_absolute_delta,
+        weighted_pass_rate_relative_delta=score_comparison.weighted_pass_rate_relative_delta,
+        case_deltas=score_comparison.case_deltas,
+        metric_deltas=score_comparison.metric_deltas,
         model_matrix=(
             matrix_row("baseline", baseline_label, baseline),
             matrix_row("candidate", candidate_label, candidate),
         ),
-        ablation_summary=AblationSummary(
-            improved_cases=sum(delta.status == "improvement" for delta in case_deltas),
-            regressed_cases=sum(delta.status == "regression" for delta in case_deltas),
-            unchanged_cases=sum(delta.status == "unchanged" for delta in case_deltas),
-        ),
+        ablation_summary=score_comparison.ablation_summary,
         budget_failures=tuple(failures),
         release_ready=candidate.release_ready and not failures,
     )

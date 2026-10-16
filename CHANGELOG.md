@@ -9,10 +9,11 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Opt-in bearer authentication with strict bounded environment configuration, redaction-safe failures, tenant-bound principals, and reader/editor/admin API authorization.
 - Immutable tenant-to-suite memberships with tenant-filtered registration, listing, pagination, totals, and evaluation lookup.
 - Immutable tenant-to-run memberships with tenant-filtered run pages, report retrieval, and dashboard rows.
+- Tenant-scoped persisted-run comparisons with candidate-minus-baseline metric, case, category, tag, and ablation evidence.
 
 ### Security
 
-- Protected suite, evaluation, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Foreign suite and run identifiers are indistinguishable from absent identifiers. Legacy suites and runs migrate only to trusted-local ownership.
+- Protected suite, evaluation, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Pairwise comparisons require both runs to belong to the authenticated tenant, render bounded redacted evidence, and treat foreign run identifiers like absent identifiers. Legacy suites and runs migrate only to trusted-local ownership.
 
 ## [0.2.0] - 2026-10-08
 

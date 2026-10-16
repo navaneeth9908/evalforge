@@ -182,3 +182,142 @@ def test_absolute_and_relative_budgets_are_independent_and_inclusive() -> None:
         ("overall", ("absolute", "relative")),
         ("metric", ("absolute", "relative")),
     ]
+
+
+def test_persisted_report_comparison_projects_redacted_score_and_slice_deltas() -> None:
+    from evalforge.comparison import compare_report_scores
+    from evalforge.contracts import EvaluationCase, ReleasePolicy
+    from evalforge.engine import evaluate_suite
+
+    cases = [
+        EvaluationCase(
+            case_id="critical-policy",
+            prompt="State the private policy.",
+            expected_output="Allowed",
+            weight=3,
+            category="policy",
+            tags=("critical-path",),
+        ),
+        EvaluationCase(
+            case_id="supporting-context",
+            prompt="Include the private context.",
+            expected_output="context",
+            metric="contains",
+            category="quality",
+            tags=("context",),
+        ),
+    ]
+    policy = ReleasePolicy(minimum_pass_rate=0.0)
+    baseline = evaluate_suite(
+        cases,
+        {"critical-policy": "Allowed", "supporting-context": "missing"},
+        policy=policy,
+    )
+    candidate = evaluate_suite(
+        cases,
+        {"critical-policy": "Denied", "supporting-context": "found context"},
+        policy=policy,
+    )
+
+    comparison = compare_report_scores(baseline, candidate)
+
+    assert comparison.weighted_pass_rate_absolute_delta == -0.5
+    assert comparison.weighted_pass_rate_relative_delta == -2 / 3
+    assert [delta.status for delta in comparison.case_deltas] == [
+        "regression",
+        "improvement",
+    ]
+    assert [delta.metric for delta in comparison.metric_deltas] == ["exact", "contains"]
+    assert [(delta.name, delta.absolute_delta) for delta in comparison.category_deltas] == [
+        ("policy", -1.0),
+        ("quality", 1.0),
+    ]
+    assert [(delta.name, delta.absolute_delta) for delta in comparison.tag_deltas] == [
+        ("context", 1.0),
+        ("critical-path", -1.0),
+    ]
+    assert comparison.ablation_summary.model_dump() == {
+        "improved_cases": 1,
+        "regressed_cases": 1,
+        "unchanged_cases": 0,
+    }
+    assert "private" not in comparison.model_dump_json()
+
+
+def test_persisted_report_comparison_rejects_misaligned_case_evidence() -> None:
+    import pytest
+
+    from evalforge.comparison import compare_report_scores
+    from evalforge.contracts import EvaluationCase, ReleasePolicy
+    from evalforge.engine import evaluate_suite
+
+    baseline = evaluate_suite(
+        [EvaluationCase(case_id="first", prompt="Private", expected_output="yes")],
+        {"first": "yes"},
+        policy=ReleasePolicy(minimum_pass_rate=0.0),
+    )
+    candidate = evaluate_suite(
+        [EvaluationCase(case_id="second", prompt="Private", expected_output="yes")],
+        {"second": "yes"},
+        policy=ReleasePolicy(minimum_pass_rate=0.0),
+    )
+
+    with pytest.raises(ValueError, match="aligned"):
+        compare_report_scores(baseline, candidate)
+
+
+def test_persisted_report_validation_rejects_forged_derived_evidence(
+    tmp_path: object,
+) -> None:
+    from dataclasses import replace
+    from pathlib import Path
+    from typing import cast
+
+    import pytest
+
+    from evalforge.contracts import EvaluationSuite
+    from evalforge.provenance import JsonValue, canonical_json_sha256
+    from evalforge.registry import SQLiteRunRegistry
+    from evalforge.service import EvalForgeService, _validated_persisted_report
+
+    registry = SQLiteRunRegistry(Path(cast(Path, tmp_path)) / "forged-report.db")
+    service = EvalForgeService(registry)
+    suite = EvaluationSuite.model_validate(
+        {
+            "schema_version": 1,
+            "name": "stored-report-integrity",
+            "minimum_pass_rate": 0.0,
+            "cases": [
+                {
+                    "case_id": "case",
+                    "prompt": "Private prompt",
+                    "expected_output": "yes",
+                }
+            ],
+        }
+    )
+    stored_suite = service.create_suite(suite, tenant_id="tenant-alpha")
+    stored = service.evaluate(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate_outputs={"case": "yes"},
+    )
+    assert isinstance(stored.report, dict)
+
+    forged_reports = (
+        {**stored.report, "weighted_pass_rate": 0.0},
+        {
+            **stored.report,
+            "evaluation_semantics_version": "forged-semantics",
+            "canonicalization_version": "forged-canonicalization",
+        },
+    )
+    for forged_report in forged_reports:
+        forged_payload = cast(JsonValue, forged_report)
+        forged = replace(
+            stored,
+            report=forged_payload,
+            report_sha256=canonical_json_sha256(forged_payload),
+        )
+        with pytest.raises(RuntimeError, match="derived evidence validation"):
+            _validated_persisted_report(forged)

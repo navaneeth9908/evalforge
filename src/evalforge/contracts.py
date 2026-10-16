@@ -1098,6 +1098,18 @@ class EvaluationReport(BaseModel):
     results: tuple[CaseResult, ...]
 
 
+class PersistedEvaluationReport(EvaluationReport):
+    """Evaluation evidence bound to its immutable persistence identifiers."""
+
+    suite_name: str = Field(min_length=1, max_length=512)
+    suite_sha256: Sha256Digest
+    candidate_sha256: Sha256Digest
+    dataset_manifest_sha256: Sha256Digest | None
+    evaluation_semantics_version: str = Field(min_length=1, max_length=256)
+    canonicalization_version: str = Field(min_length=1, max_length=256)
+    run_id: Sha256Digest
+
+
 class StabilityScoreSummary(BaseModel):
     """Deterministic aggregate statistics across repeated weighted pass rates."""
 
@@ -1221,6 +1233,19 @@ class MetricComparison(BaseModel):
     status: ComparisonStatus
 
 
+class SliceComparison(BaseModel):
+    """Candidate-minus-baseline evidence for one category or tag slice."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: SliceLabel
+    baseline_score: float = Field(ge=0.0, le=1.0)
+    candidate_score: float = Field(ge=0.0, le=1.0)
+    absolute_delta: float = Field(ge=-1.0, le=1.0)
+    relative_delta: float | None
+    status: ComparisonStatus
+
+
 class MatrixMetric(BaseModel):
     """One deterministic metric cell in a model-matrix row."""
 
@@ -1249,6 +1274,20 @@ class AblationSummary(BaseModel):
     improved_cases: int = Field(ge=0)
     regressed_cases: int = Field(ge=0)
     unchanged_cases: int = Field(ge=0)
+
+
+class ReportScoreComparison(BaseModel):
+    """Redacted descriptive deltas between two compatible evaluation reports."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    weighted_pass_rate_absolute_delta: float = Field(ge=-1.0, le=1.0)
+    weighted_pass_rate_relative_delta: float | None
+    case_deltas: tuple[CaseComparison, ...]
+    metric_deltas: tuple[MetricComparison, ...]
+    category_deltas: tuple[SliceComparison, ...]
+    tag_deltas: tuple[SliceComparison, ...]
+    ablation_summary: AblationSummary
 
 
 class RegressionBudgetFailure(BaseModel):

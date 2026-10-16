@@ -74,6 +74,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Transactional SQLite run registry with immutable, content-addressed suite and report evidence
 - Versioned FastAPI endpoints for suite creation, evaluation, run history, and report retrieval
 - Read-only local run dashboard with escaped metadata and no candidate-text rendering
+- Tenant-scoped pairwise run comparison with weighted regressions, case evidence, and category/tag slice deltas
 - Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
 - Non-root container image, loopback-only Compose deployment, and bounded health smoke
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
@@ -81,7 +82,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and basic run dashboard are implemented. Current development builds include opt-in authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access. The full regression analytics dashboard remains future work and is not presented as complete.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API, run dashboard, and a tenant-scoped pairwise comparison view are implemented. Current development builds include opt-in authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access. Historical trends and deeper analyst drill-down remain future work, so the full analytics-dashboard roadmap item is not presented as complete.
 
 ## Quick start
 
@@ -188,9 +189,12 @@ app = create_app(Path("artifacts/evalforge.db"))
 The versioned `/api/v1` surface provides health, suite creation/listing, synchronous evaluation,
 run history, and immutable report retrieval. Pagination and request sizes are bounded. Validation,
 missing-resource, and unexpected errors use redaction-safe envelopes that do not echo submitted
-prompts, candidate outputs, database details, or exception traces. `/dashboard` provides a basic
-read-only local run table with report links; it does not render candidate text or claim to be the
-future regression analytics UI.
+prompts, candidate outputs, database details, or exception traces. `/dashboard` provides a
+read-only local run table with report links and same-suite comparison links. The
+`/dashboard/compare` view derives candidate-minus-baseline weighted-pass-rate, metric, case,
+category, tag, and ablation evidence from two immutable tenant-visible runs. Both views omit raw
+candidate and expected text. Pairwise analytics do not invent a comparison release verdict, and
+historical trends plus deeper drill-down remain open roadmap work.
 
 Run the deployable server and open `http://127.0.0.1:8000/dashboard`:
 

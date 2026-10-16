@@ -21,13 +21,19 @@ from evalforge.auth import (
 )
 from evalforge.contracts import (
     CandidateOutput,
-    EvaluationReport,
     EvaluationSuite,
     OutputText,
+    PersistedEvaluationReport,
     Sha256Digest,
 )
 from evalforge.registry import RunSummary, SQLiteRunRegistry, StoredRun
-from evalforge.service import EvalForgeService, SuiteNotFoundError
+from evalforge.service import (
+    EvalForgeService,
+    IncompatibleRunComparisonError,
+    RunComparisonNotFoundError,
+    StoredRunComparison,
+    SuiteNotFoundError,
+)
 
 
 class HealthResponse(BaseModel):
@@ -108,16 +114,8 @@ class EvaluationRequest(BaseModel):
     )
 
 
-class EvaluationReportResponse(EvaluationReport):
+class EvaluationReportResponse(PersistedEvaluationReport):
     """Core report wrapped with reproducibility identifiers."""
-
-    suite_name: str = Field(min_length=1, max_length=512)
-    suite_sha256: Sha256Digest
-    candidate_sha256: Sha256Digest
-    dataset_manifest_sha256: Sha256Digest | None
-    evaluation_semantics_version: str
-    canonicalization_version: str
-    run_id: Sha256Digest
 
 
 class EvaluationResponse(BaseModel):
@@ -189,6 +187,23 @@ def _run_response(stored: StoredRun) -> RunResponse:
 
 
 def _dashboard_html(runs: tuple[RunSummary, ...]) -> str:
+    def comparison_link(index: int, run: RunSummary) -> str:
+        previous = next(
+            (
+                older
+                for older in runs[index + 1 :]
+                if older.suite_sha256 == run.suite_sha256
+                and older.dataset_manifest_sha256 == run.dataset_manifest_sha256
+            ),
+            None,
+        )
+        if previous is None:
+            return ""
+        return (
+            '<br><a href="/dashboard/compare?baseline_run_id='
+            f'{previous.run_id}&amp;candidate_run_id={run.run_id}">compare with previous</a>'
+        )
+
     rows = "".join(
         (
             "<tr>"
@@ -197,10 +212,11 @@ def _dashboard_html(runs: tuple[RunSummary, ...]) -> str:
             f"<td>{escape(run.suite_name)}</td>"
             f"<td><code>{run.run_id}</code></td>"
             f"<td>{escape(run.created_at)}</td>"
-            f'<td><a href="/api/v1/reports/{run.run_id}">report</a></td>'
+            f'<td><a href="/api/v1/reports/{run.run_id}">report</a>'
+            f"{comparison_link(index, run)}</td>"
             "</tr>"
         )
-        for run in runs
+        for index, run in enumerate(runs)
     )
     if not rows:
         rows = '<tr><td colspan="5">No persisted runs yet.</td></tr>'
@@ -230,6 +246,157 @@ def _dashboard_html(runs: tuple[RunSummary, ...]) -> str:
 </body>
 </html>
 """
+
+
+def _percent(value: float) -> str:
+    return f"{value * 100:.2f}%"
+
+
+def _signed_percent(value: float) -> str:
+    return f"{value * 100:+.2f}%"
+
+
+def _comparison_dashboard_html(comparison: StoredRunComparison) -> str:
+    scores = comparison.scores
+    metric_rows = "".join(
+        (
+            "<tr>"
+            f"<td>{escape(delta.metric)}</td>"
+            f"<td>{_percent(delta.baseline_score)}</td>"
+            f"<td>{_percent(delta.candidate_score)}</td>"
+            f"<td>{_signed_percent(delta.absolute_delta)}</td>"
+            f'<td class="{escape(delta.status)}">{escape(delta.status)}</td>'
+            "</tr>"
+        )
+        for delta in scores.metric_deltas
+    )
+    case_rows = "".join(
+        (
+            "<tr>"
+            f"<td>{escape(delta.case_id)}</td>"
+            f"<td>{escape(delta.metric)}</td>"
+            f"<td>{_percent(delta.baseline_score)}</td>"
+            f"<td>{_percent(delta.candidate_score)}</td>"
+            f"<td>{_signed_percent(delta.absolute_delta)}</td>"
+            f'<td class="{escape(delta.status)}">{escape(delta.status)}</td>'
+            "</tr>"
+        )
+        for delta in scores.case_deltas[:100]
+    )
+    category_rows = "".join(
+        (
+            "<tr>"
+            f"<td>{escape(delta.name)}</td>"
+            f"<td>{_percent(delta.baseline_score)}</td>"
+            f"<td>{_percent(delta.candidate_score)}</td>"
+            f"<td>{_signed_percent(delta.absolute_delta)}</td>"
+            f'<td class="{escape(delta.status)}">{escape(delta.status)}</td>'
+            "</tr>"
+        )
+        for delta in scores.category_deltas[:100]
+    )
+    tag_rows = "".join(
+        (
+            "<tr>"
+            f"<td>{escape(delta.name)}</td>"
+            f"<td>{_percent(delta.baseline_score)}</td>"
+            f"<td>{_percent(delta.candidate_score)}</td>"
+            f"<td>{_signed_percent(delta.absolute_delta)}</td>"
+            f'<td class="{escape(delta.status)}">{escape(delta.status)}</td>'
+            "</tr>"
+        )
+        for delta in scores.tag_deltas[:100]
+    )
+    case_note = (
+        f"Showing 100 of {len(scores.case_deltas)} cases."
+        if len(scores.case_deltas) > 100
+        else f"Showing all {len(scores.case_deltas)} cases."
+    )
+    slice_note = (
+        "Category and tag tables show at most 100 rows each."
+        if len(scores.category_deltas) > 100 or len(scores.tag_deltas) > 100
+        else "All category and tag slices are shown."
+    )
+    suite_description = (
+        "<p>Descriptive candidate-minus-baseline analytics for "
+        f"<strong>{escape(comparison.suite_name)}</strong>. "
+        "Candidate and expected text are not rendered.</p>"
+    )
+    baseline_summary = (
+        f"<section><h2>Baseline</h2><code>{escape(comparison.baseline.run_id)}</code>"
+        f"<p>Weighted pass rate: {_percent(comparison.baseline_weighted_pass_rate)}</p>"
+        f'<p><a href="/api/v1/reports/{escape(comparison.baseline.run_id)}">'
+        "Report</a></p></section>"
+    )
+    candidate_summary = (
+        f"<section><h2>Candidate</h2><code>{escape(comparison.candidate.run_id)}</code>"
+        f"<p>Weighted pass rate: {_percent(comparison.candidate_weighted_pass_rate)}</p>"
+        f'<p><a href="/api/v1/reports/{escape(comparison.candidate.run_id)}">'
+        "Report</a></p></section>"
+    )
+    delta_status = (
+        "regression"
+        if scores.weighted_pass_rate_absolute_delta < 0
+        else "improvement"
+        if scores.weighted_pass_rate_absolute_delta > 0
+        else "unchanged"
+    )
+    delta_summary = (
+        f'<section><h2>Delta</h2><p class="{delta_status}">Weighted pass rate: '
+        f"{_signed_percent(scores.weighted_pass_rate_absolute_delta)}</p>"
+        f"<p>{scores.ablation_summary.improved_cases} improved, "
+        f"{scores.ablation_summary.regressed_cases} regressed, "
+        f"{scores.ablation_summary.unchanged_cases} unchanged</p></section>"
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EvalForge run comparison</title>
+  <style>
+    body {{ font: 16px/1.5 system-ui, sans-serif; margin: 2rem; color: #172033; }}
+    table {{ border-collapse: collapse; width: 100%; margin-bottom: 2rem; }}
+    th, td {{ border-bottom: 1px solid #d8deea; padding: .65rem; text-align: left; }}
+    code {{ font-size: .8rem; overflow-wrap: anywhere; }}
+    .summary {{ display: flex; gap: 2rem; flex-wrap: wrap; }}
+    .summary section {{ border: 1px solid #d8deea; border-radius: .5rem; padding: 1rem; }}
+    .improvement {{ color: #087a3e; }} .regression {{ color: #b42318; }}
+    .unchanged {{ color: #475467; }}
+  </style>
+</head>
+<body>
+  <p><a href="/dashboard">Back to runs</a></p>
+  <h1>EvalForge run comparison</h1>
+  {suite_description}
+  <div class="summary">
+    {baseline_summary}
+    {candidate_summary}
+    {delta_summary}
+  </div>
+  <h2>Metric evidence</h2>
+  <table><thead><tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Delta</th><th>Status</th></tr></thead><tbody>{metric_rows}</tbody></table>
+  <h2>Case evidence</h2><p>{escape(case_note)}</p>
+  <table><thead><tr><th>Case</th><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Delta</th><th>Status</th></tr></thead><tbody>{case_rows}</tbody></table>
+  <h2>Category slices</h2><p>{escape(slice_note)}</p>
+  <table><thead><tr><th>Slice</th><th>Baseline</th><th>Candidate</th><th>Delta</th><th>Status</th></tr></thead><tbody>{category_rows}</tbody></table>
+  <h2>Tag slices</h2>
+  <table><thead><tr><th>Slice</th><th>Baseline</th><th>Candidate</th><th>Delta</th><th>Status</th></tr></thead><tbody>{tag_rows}</tbody></table>
+</body>
+</html>
+"""
+
+
+def _secure_dashboard_response(content: str) -> HTMLResponse:
+    response = HTMLResponse(content)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 def create_app(
@@ -335,17 +502,35 @@ def create_app(
     def dashboard(
         principal: AuthenticatedPrincipal = read_dependency,
     ) -> HTMLResponse:
-        response = HTMLResponse(
+        return _secure_dashboard_response(
             _dashboard_html(service.list_runs(tenant_id=principal.tenant_id, limit=100, offset=0))
         )
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; "
-            "base-uri 'none'; form-action 'none'"
-        )
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        return response
+
+    @app.get("/dashboard/compare", response_class=HTMLResponse, include_in_schema=False)
+    def compare_dashboard(
+        baseline_run_id: Annotated[Sha256Digest, Query()],
+        candidate_run_id: Annotated[Sha256Digest, Query()],
+        principal: AuthenticatedPrincipal = read_dependency,
+    ) -> HTMLResponse:
+        try:
+            comparison = service.compare_runs(
+                tenant_id=principal.tenant_id,
+                baseline_run_id=baseline_run_id,
+                candidate_run_id=candidate_run_id,
+            )
+        except RunComparisonNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="run_comparison_not_found",
+                message="run comparison was not found",
+            ) from exc
+        except IncompatibleRunComparisonError as exc:
+            raise APIError(
+                status_code=409,
+                code="runs_not_comparable",
+                message="evaluation runs are not comparable",
+            ) from exc
+        return _secure_dashboard_response(_comparison_dashboard_html(comparison))
 
     @app.post(
         "/api/v1/suites",

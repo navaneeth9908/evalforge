@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import cast
 
-from evalforge.contracts import CandidateOutput, EvaluationSuite
+from evalforge.comparison import compare_report_scores
+from evalforge.contracts import (
+    CandidateOutput,
+    EvaluationReport,
+    EvaluationSuite,
+    PersistedEvaluationReport,
+    ReportScoreComparison,
+)
 from evalforge.engine import evaluate_suite
 from evalforge.provenance import (
     CANONICALIZATION_VERSION,
@@ -24,6 +32,77 @@ from evalforge.registry import (
 
 class SuiteNotFoundError(LookupError):
     """A requested suite digest is not present in local storage."""
+
+
+class RunComparisonNotFoundError(LookupError):
+    """One or both requested runs are not visible to the tenant."""
+
+
+class IncompatibleRunComparisonError(ValueError):
+    """Two visible runs do not share one evaluation contract."""
+
+
+@dataclass(frozen=True)
+class StoredRunComparison:
+    """Privacy-safe descriptive analytics over two immutable stored runs."""
+
+    suite_name: str
+    baseline: RunSummary
+    candidate: RunSummary
+    baseline_weighted_pass_rate: float
+    candidate_weighted_pass_rate: float
+    scores: ReportScoreComparison
+
+
+def _validated_persisted_report(stored: StoredRun) -> PersistedEvaluationReport:
+    if (
+        canonical_json_sha256(stored.report) != stored.report_sha256
+        or canonical_json_sha256(stored.suite) != stored.suite_sha256
+        or canonical_json_sha256(stored.candidate) != stored.candidate_sha256
+    ):
+        raise RuntimeError("stored evaluation report failed integrity validation")
+    try:
+        report = PersistedEvaluationReport.model_validate(stored.report)
+        suite = EvaluationSuite.model_validate(stored.suite)
+        if not isinstance(stored.candidate, dict):
+            raise ValueError("stored candidate evidence must be an object")
+        candidate_outputs = {
+            case_id: (output if isinstance(output, str) else CandidateOutput.model_validate(output))
+            for case_id, output in stored.candidate.items()
+        }
+        expected_report = evaluate_suite(
+            suite.cases,
+            candidate_outputs,
+            policy=suite.resolved_policy,
+        )
+    except ValueError as exc:
+        raise RuntimeError("stored evaluation report failed contract validation") from exc
+    if (
+        report.run_id != stored.run_id
+        or report.suite_name != stored.suite_name
+        or report.suite_name != suite.name
+        or report.suite_sha256 != stored.suite_sha256
+        or report.candidate_sha256 != stored.candidate_sha256
+        or report.dataset_manifest_sha256 != stored.dataset_manifest_sha256
+        or report.release_ready != stored.release_ready
+    ):
+        raise RuntimeError("stored evaluation report failed identity validation")
+    expected_run_id = deterministic_run_id(
+        suite_sha256=stored.suite_sha256,
+        candidate_sha256=stored.candidate_sha256,
+        dataset_manifest_sha256=stored.dataset_manifest_sha256,
+    )
+    persisted_evaluation = EvaluationReport.model_validate(
+        report.model_dump(mode="python", include=set(EvaluationReport.model_fields))
+    )
+    if (
+        report.run_id != expected_run_id
+        or report.evaluation_semantics_version != EVALUATION_SEMANTICS_VERSION
+        or report.canonicalization_version != CANONICALIZATION_VERSION
+        or persisted_evaluation != expected_report
+    ):
+        raise RuntimeError("stored evaluation report failed derived evidence validation")
+    return report
 
 
 class EvalForgeService:
@@ -120,3 +199,39 @@ class EvalForgeService:
         """Load one run and its complete immutable evidence."""
 
         return self.registry.get_run(tenant_id=tenant_id, run_id=run_id)
+
+    def compare_runs(
+        self,
+        *,
+        tenant_id: str,
+        baseline_run_id: str,
+        candidate_run_id: str,
+    ) -> StoredRunComparison:
+        """Derive redacted analytics for two tenant-visible compatible runs."""
+
+        baseline = self.registry.get_run(tenant_id=tenant_id, run_id=baseline_run_id)
+        candidate = self.registry.get_run(tenant_id=tenant_id, run_id=candidate_run_id)
+        if baseline is None or candidate is None:
+            raise RunComparisonNotFoundError("run comparison was not found")
+        baseline_report = _validated_persisted_report(baseline)
+        candidate_report = _validated_persisted_report(candidate)
+        if (
+            baseline.suite_sha256 != candidate.suite_sha256
+            or baseline.dataset_manifest_sha256 != candidate.dataset_manifest_sha256
+            or baseline_report.evaluation_semantics_version
+            != candidate_report.evaluation_semantics_version
+            or baseline_report.canonicalization_version != candidate_report.canonicalization_version
+        ):
+            raise IncompatibleRunComparisonError("evaluation runs are not comparable")
+        try:
+            scores = compare_report_scores(baseline_report, candidate_report)
+        except ValueError as exc:
+            raise RuntimeError("stored evaluation reports failed alignment validation") from exc
+        return StoredRunComparison(
+            suite_name=baseline.suite_name,
+            baseline=baseline.summary(),
+            candidate=candidate.summary(),
+            baseline_weighted_pass_rate=baseline_report.weighted_pass_rate,
+            candidate_weighted_pass_rate=candidate_report.weighted_pass_rate,
+            scores=scores,
+        )

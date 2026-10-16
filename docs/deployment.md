@@ -21,7 +21,7 @@ uv run --frozen evalforge-smoke \
   --base-url http://127.0.0.1:8000 --timeout-seconds 5
 ```
 
-Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. The OpenAPI document is at `/openapi.json`.
+Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. Runs with an older same-suite entry include a link to `/dashboard/compare`, which renders bounded descriptive regression and slice evidence without candidate or expected text after the route verifies full compatibility. The OpenAPI document is at `/openapi.json`.
 
 ## Container image
 
@@ -82,6 +82,12 @@ and dashboard rows filter through immutable tenant-to-run memberships before res
 Foreign run IDs receive the same not-found envelopes as absent IDs. Identical content-addressed run
 evidence can be independently evaluated by multiple tenants without transferring membership or its
 timestamp. Existing schema-v2 runs migrate only to the trusted-local namespace.
+
+The pairwise comparison route is read-only and available to reader, editor, and admin roles. Both
+run IDs are resolved through tenant membership before compatibility checks. Visible runs must share
+the exact suite, dataset lineage, evaluator semantics, and canonicalization version. The view shows
+descriptive deltas rather than a comparison-policy release verdict and caps case, category, and tag
+tables at 100 rows each.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 

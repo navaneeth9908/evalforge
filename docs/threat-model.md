@@ -51,7 +51,7 @@ flowchart LR
 1. **Caller to parser/API.** JSON, path arguments, suite definitions, regular expressions, traces, and output text are attacker-controlled. Limits and strict schemas must run before expensive work.
 2. **Process to provider network.** Provider URLs, DNS answers, redirects, response size, latency, and response JSON are not trusted. Credentials cross this boundary only in authorization headers.
 3. **Evaluation engine to persistence.** Reports may contain sensitive business evidence. SQLite provides local durability, not confidentiality or multi-writer service guarantees.
-4. **Persistence to API/dashboard.** API clients can observe persisted metadata and reports. Dashboard fields require HTML escaping. Summary views deliberately omit candidate text.
+4. **Persistence to API/dashboard.** API clients can observe persisted metadata and reports. Dashboard fields require HTML escaping. Summary and comparison views deliberately omit candidate and expected text; pairwise analytics accept only tenant-authorized runs and render bounded redacted projections.
 5. **Reports to CI and GitHub.** JUnit and SARIF become externally visible artifacts or annotations. They must contain bounded, redacted evidence rather than raw sensitive values.
 6. **Repository to CI/container.** Dependencies, Actions, build context, and generated files can affect release integrity. Locking, immutable Action references, minimal build context, and a non-root runtime reduce exposure.
 7. **External code harness to evaluator.** Candidate code is untrusted, but its sandbox and evidence producer are trusted. EvalForge validates provenance, exact case accounting, and terminal outcomes; it does not execute code or attest sandbox controls.
@@ -71,7 +71,7 @@ flowchart LR
 | Credential disclosure | Environment-only provider credentials; generic `ProviderError`; no secret values in reports; repository secret scan | Environment and process inspection remain privileged local risks |
 | SSRF or provider endpoint abuse | Operator-supplied HTTP(S) origin rejects URL credentials/query/fragment; direct transport does not follow redirects; connect/read/overall deadlines and response bytes are bounded | HTTP remains supported for trusted local endpoints, and DNS/IP egress validation is external in v0.2.0 |
 | SQL injection or registry corruption | Parameterized SQLite statements; typed repository methods; deterministic IDs; transactions and schema checks | The local database is not protected from a user who can modify the file directly |
-| Cross-site scripting in the dashboard | HTML escaping, no candidate text, restrictive Content Security Policy, `nosniff`, no-store; current `main` can require bearer authentication | Reverse-proxy headers, origin policy, and TLS are deployment responsibilities |
+| Cross-site scripting or evidence disclosure in the dashboard | HTML escaping, no candidate or expected text in summary/comparison renderers, 100-row comparison-table caps, restrictive Content Security Policy, `nosniff`, no-store; current `main` can require bearer authentication | Case and slice identifiers remain visible metadata; reverse-proxy headers, origin policy, and TLS are deployment responsibilities |
 | Unauthorized evaluation or report access | Loopback-only Compose default; current `main` offers opt-in bearer authentication, constant-time digest checks, generic failures, reader/editor/admin authorization, immutable tenant memberships, tenant-filtered suite/run/dashboard views, and foreign-resource non-disclosure | Access control is disabled when configuration is absent; static bearer configuration does not provide credential rotation, revocation, federation, quotas, or encrypted storage |
 | False release approval | Fail-closed thresholds, exact evidence cardinality, strict integers, provenance digests, deterministic IDs, tests across gate failures | Deterministic metrics can be incomplete proxies for product quality; human review remains necessary |
 | Forged or incomplete code-test evidence | Approved producer/runtime provenance digest, exact ordered required-case accounting, blocking infrastructure outcomes, content-addressed candidate/evidence IDs | JSON evidence is not a signed execution attestation; producer compromise or weak sandboxing remains external |
@@ -87,7 +87,7 @@ flowchart LR
 - Missing, partial, non-finite, ambiguous, or out-of-range evidence fails before artifact creation.
 - Evaluation identity binds suite, candidate evidence, semantics, and optional dataset lineage without publishing raw content.
 - Provider and validation errors do not echo secrets, full request payloads, or provider response bodies.
-- Candidate output is not rendered in run lists or the dashboard.
+- Candidate and expected output are not rendered in run lists or pairwise dashboard comparisons.
 - Security findings report category and location metadata, not matched sensitive values.
 - CI and release workflows require no provider credential for the synthetic acceptance path.
 

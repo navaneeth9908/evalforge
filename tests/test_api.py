@@ -204,3 +204,129 @@ def test_dashboard_summarizes_persisted_runs_without_exposing_candidate_text(
     )
     assert dashboard.headers["x-content-type-options"] == "nosniff"
     assert dashboard.headers["referrer-policy"] == "no-referrer"
+
+
+def test_dashboard_compares_persisted_runs_without_rendering_private_outputs(
+    tmp_path: Path,
+) -> None:
+    from evalforge.api import create_app
+
+    suite_payload = {
+        "schema_version": 1,
+        "name": 'comparison-</td><script>alert("x")</script>',
+        "minimum_pass_rate": 0.0,
+        "cases": [
+            {
+                "case_id": "critical-policy",
+                "prompt": "State the private policy.",
+                "expected_output": "Allowed",
+                "weight": 3,
+                "category": "policy",
+                "tags": ["critical-path"],
+            },
+            {
+                "case_id": "supporting-context",
+                "prompt": "Include the private context.",
+                "expected_output": "context",
+                "metric": "contains",
+                "category": "quality",
+                "tags": ["context"],
+            },
+        ],
+    }
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        suite = client.post("/api/v1/suites", json=suite_payload).json()
+        baseline = client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_id": suite["suite_id"],
+                "candidate_outputs": {
+                    "critical-policy": "Allowed",
+                    "supporting-context": "missing baseline-private-value",
+                },
+            },
+        ).json()
+        candidate = client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_id": suite["suite_id"],
+                "candidate_outputs": {
+                    "critical-policy": "Denied candidate-private-value",
+                    "supporting-context": "found context candidate-private-value",
+                },
+            },
+        ).json()
+        run_dashboard = client.get("/dashboard")
+        dashboard = client.get(
+            "/dashboard/compare",
+            params={
+                "baseline_run_id": baseline["run_id"],
+                "candidate_run_id": candidate["run_id"],
+            },
+        )
+
+    assert dashboard.status_code == 200
+    assert run_dashboard.status_code == 200
+    assert "/dashboard/compare?baseline_run_id=" in run_dashboard.text
+    assert f"baseline_run_id={baseline['run_id']}" in run_dashboard.text
+    assert f"candidate_run_id={candidate['run_id']}" in run_dashboard.text
+    assert "EvalForge run comparison" in dashboard.text
+    assert baseline["run_id"] in dashboard.text
+    assert candidate["run_id"] in dashboard.text
+    assert "Weighted pass rate" in dashboard.text
+    assert "critical-policy" in dashboard.text
+    assert "regression" in dashboard.text
+    assert "Category slices" in dashboard.text
+    assert "critical-path" in dashboard.text
+    assert (
+        "comparison-&lt;/td&gt;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in dashboard.text
+    )
+    assert "</td><script>" not in dashboard.text
+    for private_value in (
+        "baseline-private-value",
+        "candidate-private-value",
+        "State the private policy",
+        "Include the private context",
+    ):
+        assert private_value not in dashboard.text
+    assert dashboard.headers["cache-control"] == "no-store"
+    assert dashboard.headers["content-security-policy"] == (
+        "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    assert dashboard.headers["x-content-type-options"] == "nosniff"
+    assert dashboard.headers["referrer-policy"] == "no-referrer"
+
+
+def test_dashboard_comparison_rejects_visible_runs_from_different_suites(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        first_suite = client.post("/api/v1/suites", json=_suite("first-suite")).json()
+        second_suite = client.post("/api/v1/suites", json=_suite("second-suite")).json()
+        first_run = client.post(
+            "/api/v1/evaluations",
+            json={"suite_id": first_suite["suite_id"], "candidate_outputs": {"policy": "Allowed"}},
+        ).json()
+        second_run = client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_id": second_suite["suite_id"],
+                "candidate_outputs": {"policy": "Allowed"},
+            },
+        ).json()
+        response = client.get(
+            "/dashboard/compare",
+            params={
+                "baseline_run_id": first_run["run_id"],
+                "candidate_run_id": second_run["run_id"],
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": {
+            "code": "runs_not_comparable",
+            "message": "evaluation runs are not comparable",
+        }
+    }
