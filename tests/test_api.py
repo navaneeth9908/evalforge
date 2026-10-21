@@ -330,3 +330,97 @@ def test_dashboard_comparison_rejects_visible_runs_from_different_suites(tmp_pat
             "message": "evaluation runs are not comparable",
         }
     }
+
+
+def test_dashboard_trend_chains_recorded_runs_into_pairwise_evidence(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    from itertools import count
+
+    from evalforge import registry as registry_module
+    from evalforge.api import create_app
+
+    ticks = count()
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        registry_module,
+        "_utc_now",
+        lambda: f"2026-01-01T00:00:00.{next(ticks):06d}Z",
+    )
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        suite = client.post(
+            "/api/v1/suites",
+            json=_suite('trend-</strong><script>alert("x")</script>'),
+        ).json()
+        runs = [
+            client.post(
+                "/api/v1/evaluations",
+                json={
+                    "suite_id": suite["suite_id"],
+                    "candidate_outputs": {"policy": output},
+                },
+            ).json()["run_id"]
+            for output in ("Allowed", "Denied", " allowed ")
+        ]
+        other_suite = client.post("/api/v1/suites", json=_suite("unrelated-suite")).json()
+        unrelated_run = client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_id": other_suite["suite_id"],
+                "candidate_outputs": {"policy": "Allowed"},
+            },
+        ).json()["run_id"]
+
+        response = client.get("/dashboard/trends", params={"run_id": runs[-1]})
+        run_dashboard = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "Recorded unique-run history" in response.text
+    assert unrelated_run not in response.text
+    assert "trend-&lt;/strong&gt;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in response.text
+    assert "</strong><script>" not in response.text
+    assert (
+        response.text.index(runs[0]) < response.text.index(runs[1]) < response.text.index(runs[2])
+    )
+    assert f"baseline_run_id={runs[0]}&amp;candidate_run_id={runs[1]}" in response.text
+    assert f"baseline_run_id={runs[1]}&amp;candidate_run_id={runs[2]}" in response.text
+    assert "-100.00%" in response.text
+    assert "+100.00%" in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert "view history" in run_dashboard.text
+
+
+def test_dashboard_trend_fails_closed_when_stored_history_is_corrupt(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    from dataclasses import replace
+
+    from evalforge.api import create_app
+
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        suite = client.post("/api/v1/suites", json=_suite("corrupt-trend")).json()
+        run_id = client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_id": suite["suite_id"],
+                "candidate_outputs": {"policy": "Allowed"},
+            },
+        ).json()["run_id"]
+        stored = app.state.service.registry.get_run(tenant_id="__local__", run_id=run_id)
+        assert stored is not None
+        corrupt = replace(stored, candidate={"policy": "private-corrupt-value"})
+        monkeypatch.setattr(  # type: ignore[attr-defined]
+            app.state.service.registry,
+            "list_compatible_runs",
+            lambda **_kwargs: (corrupt,),
+        )
+
+        response = client.get("/dashboard/trends", params={"run_id": run_id})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {"code": "internal_error", "message": "internal service error"}
+    }
+    assert "private-corrupt-value" not in response.text

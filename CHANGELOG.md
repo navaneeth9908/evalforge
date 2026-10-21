@@ -10,10 +10,11 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Immutable tenant-to-suite memberships with tenant-filtered registration, listing, pagination, totals, and evaluation lookup.
 - Immutable tenant-to-run memberships with tenant-filtered run pages, report retrieval, and dashboard rows.
 - Tenant-scoped persisted-run comparisons with candidate-minus-baseline metric, case, category, tag, and ablation evidence.
+- Tenant-scoped recorded unique-run trends with validated weighted pass rates, deterministic chronology, and adjacent pairwise evidence links.
 
 ### Security
 
-- Protected suite, evaluation, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Pairwise comparisons require both runs to belong to the authenticated tenant, render bounded redacted evidence, and treat foreign run identifiers like absent identifiers. Legacy suites and runs migrate only to trusted-local ownership.
+- Protected suite, evaluation, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Pairwise comparisons and trends require tenant-visible anchors, revalidate stored evidence, render bounded redacted projections, and treat foreign run identifiers like absent identifiers. Legacy suites and runs migrate only to trusted-local ownership.
 
 ## [0.2.0] - 2026-10-08
 

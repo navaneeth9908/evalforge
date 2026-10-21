@@ -648,6 +648,35 @@ class SQLiteRunRegistry:
         finally:
             connection.close()
 
+    def list_compatible_runs(
+        self,
+        *,
+        tenant_id: str,
+        suite_sha256: str,
+        dataset_manifest_sha256: str | None,
+        limit: int = 20,
+    ) -> tuple[StoredRun, ...]:
+        """List a bounded tenant history for one exact suite and dataset lineage."""
+
+        _validate_tenant_id(tenant_id)
+        _require_digest(suite_sha256, label="suite digest")
+        if dataset_manifest_sha256 is not None:
+            _require_digest(dataset_manifest_sha256, label="dataset manifest digest")
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("trend limit must be an integer from 1 through 20")
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                _RUN_SELECT
+                + " WHERE tenant_runs.tenant_id = ? AND suites.digest = ?"
+                + " AND runs.dataset_manifest_digest IS ?"
+                + " ORDER BY tenant_runs.created_at DESC, runs.run_id LIMIT ?",
+                (tenant_id, suite_sha256, dataset_manifest_sha256, limit),
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(_stored_run(row) for row in rows)
+
     def diagnostics(self) -> RegistryDiagnostics:
         """Read the applied migration and effective SQLite safety defaults."""
 

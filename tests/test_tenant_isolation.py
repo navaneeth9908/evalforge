@@ -251,3 +251,44 @@ def test_run_comparison_treats_foreign_and_absent_run_ids_identically(tmp_path: 
     assert all(response.status_code == 404 for response in responses)
     assert all(response.json() == expected for response in responses)
     assert all("private-alpha-comparison" not in response.text for response in responses)
+
+
+def test_run_trend_treats_foreign_and_absent_anchor_ids_identically(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.auth import AccessCredential
+
+    alpha_token = "tenant-alpha-editor-token-0000000001"
+    beta_token = "tenant-beta-reader-token-00000000001"
+    app = create_app(
+        tmp_path / "tenant-trends.db",
+        access_credentials=(
+            AccessCredential(token=alpha_token, tenant_id="tenant-alpha", role="editor"),
+            AccessCredential(token=beta_token, tenant_id="tenant-beta", role="reader"),
+        ),
+    )
+    with TestClient(app) as client:
+        alpha_suite = client.post(
+            "/api/v1/suites",
+            headers=_authorization(alpha_token),
+            json=_suite("private-alpha-trend"),
+        ).json()
+        alpha_run = client.post(
+            "/api/v1/evaluations",
+            headers=_authorization(alpha_token),
+            json={"suite_id": alpha_suite["suite_id"], "candidate_outputs": {"policy": "Denied"}},
+        ).json()["run_id"]
+        foreign = client.get(
+            "/dashboard/trends",
+            headers=_authorization(beta_token),
+            params={"run_id": alpha_run},
+        )
+        absent = client.get(
+            "/dashboard/trends",
+            headers=_authorization(beta_token),
+            params={"run_id": "0" * 64},
+        )
+
+    expected = {"error": {"code": "run_trend_not_found", "message": "run trend was not found"}}
+    assert foreign.status_code == absent.status_code == 404
+    assert foreign.json() == absent.json() == expected
+    assert "private-alpha-trend" not in foreign.text

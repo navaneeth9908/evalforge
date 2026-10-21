@@ -73,6 +73,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "evalforge demo" in readme
     assert "/dashboard" in readme
     assert "/dashboard/compare" in readme
+    assert "/dashboard/trends" in readme
 
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
         "version"
@@ -114,8 +115,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
         "with trusted-local legacy migration" in acceptance
     )
     assert (
-        "Full regression analytics dashboard | Partial: tenant-scoped persisted-run comparison"
-        in acceptance
+        "Full regression analytics dashboard | Partial: tenant-scoped pairwise comparison and "
+        "bounded compatible unique-run history" in acceptance
     )
     assert "M4 local operations and release hardening | Complete" in acceptance
     assert "M5 governed semantic similarity and embedding metrics | Complete" in acceptance
@@ -152,6 +153,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "[x] Cross-dataset scorecards and long-horizon trend analysis" in roadmap
     assert "- [ ] Full analyst dashboard" in roadmap
     assert "- [x] Tenant-scoped pairwise run comparison" in roadmap
+    assert "- [x] Bounded compatible unique-run history" in roadmap
 
     architecture = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     assert "cross-dataset scorecard" in architecture.lower()

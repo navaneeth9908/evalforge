@@ -21,7 +21,7 @@ uv run --frozen evalforge-smoke \
   --base-url http://127.0.0.1:8000 --timeout-seconds 5
 ```
 
-Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. Runs with an older same-suite entry include a link to `/dashboard/compare`, which renders bounded descriptive regression and slice evidence without candidate or expected text after the route verifies full compatibility. The OpenAPI document is at `/openapi.json`.
+Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. Runs link to `/dashboard/trends`, which revalidates and renders at most 20 exact-suite, exact-lineage unique records with adjacent `/dashboard/compare` evidence. Identical deterministic reruns appear once, and “Recorded” is the tenant-membership time rather than an execution-attempt time. Comparison renders bounded descriptive regression and slice evidence only after verifying full compatibility. These pages omit candidate and expected text. The OpenAPI document is at `/openapi.json`.
 
 ## Container image
 

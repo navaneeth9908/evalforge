@@ -481,3 +481,25 @@ def test_create_run_rejects_suite_name_metadata_mismatch(tmp_path: Path) -> None
             candidate=candidate,
             report=report,
         )
+
+
+def test_compatible_run_history_rejects_more_than_twenty_points(tmp_path: Path) -> None:
+    from evalforge.registry import SQLiteRunRegistry
+    from evalforge.service import EvalForgeService
+
+    registry = SQLiteRunRegistry(tmp_path / "bounded-trends.db")
+    service = EvalForgeService(registry)
+
+    with pytest.raises(ValueError, match="trend limit must be an integer from 1 through 20"):
+        registry.list_compatible_runs(
+            tenant_id="__local__",
+            suite_sha256="0" * 64,
+            dataset_manifest_sha256=None,
+            limit=21,
+        )
+    with pytest.raises(ValueError, match="trend limit must be an integer from 1 through 20"):
+        service.get_run_trend(
+            tenant_id="__local__",
+            anchor_run_id="0" * 64,
+            limit=21,
+        )

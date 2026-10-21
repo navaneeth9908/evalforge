@@ -42,6 +42,10 @@ class IncompatibleRunComparisonError(ValueError):
     """Two visible runs do not share one evaluation contract."""
 
 
+class RunTrendNotFoundError(LookupError):
+    """The trend anchor is not visible to the tenant."""
+
+
 @dataclass(frozen=True)
 class StoredRunComparison:
     """Privacy-safe descriptive analytics over two immutable stored runs."""
@@ -52,6 +56,23 @@ class StoredRunComparison:
     baseline_weighted_pass_rate: float
     candidate_weighted_pass_rate: float
     scores: ReportScoreComparison
+
+
+@dataclass(frozen=True)
+class StoredRunTrendPoint:
+    """One validated, redacted point in recorded unique-run history."""
+
+    run: RunSummary
+    weighted_pass_rate: float
+
+
+@dataclass(frozen=True)
+class StoredRunTrend:
+    """Bounded chronological history for one immutable evaluation contract."""
+
+    suite_name: str
+    anchor_run_id: str
+    points: tuple[StoredRunTrendPoint, ...]
 
 
 def _validated_persisted_report(stored: StoredRun) -> PersistedEvaluationReport:
@@ -234,4 +255,45 @@ class EvalForgeService:
             baseline_weighted_pass_rate=baseline_report.weighted_pass_rate,
             candidate_weighted_pass_rate=candidate_report.weighted_pass_rate,
             scores=scores,
+        )
+
+    def get_run_trend(
+        self,
+        *,
+        tenant_id: str,
+        anchor_run_id: str,
+        limit: int = 20,
+    ) -> StoredRunTrend:
+        """Derive bounded validated history from a tenant-visible anchor run."""
+
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("trend limit must be an integer from 1 through 20")
+        anchor = self.registry.get_run(tenant_id=tenant_id, run_id=anchor_run_id)
+        if anchor is None:
+            raise RunTrendNotFoundError("run trend was not found")
+        anchor_report = _validated_persisted_report(anchor)
+        stored_runs = self.registry.list_compatible_runs(
+            tenant_id=tenant_id,
+            suite_sha256=anchor.suite_sha256,
+            dataset_manifest_sha256=anchor.dataset_manifest_sha256,
+            limit=limit,
+        )
+        points: list[StoredRunTrendPoint] = []
+        for stored in reversed(stored_runs):
+            report = _validated_persisted_report(stored)
+            if (
+                report.evaluation_semantics_version != anchor_report.evaluation_semantics_version
+                or report.canonicalization_version != anchor_report.canonicalization_version
+            ):
+                raise RuntimeError("stored trend history failed compatibility validation")
+            points.append(
+                StoredRunTrendPoint(
+                    run=stored.summary(),
+                    weighted_pass_rate=report.weighted_pass_rate,
+                )
+            )
+        return StoredRunTrend(
+            suite_name=anchor.suite_name,
+            anchor_run_id=anchor.run_id,
+            points=tuple(points),
         )

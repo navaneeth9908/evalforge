@@ -31,7 +31,9 @@ from evalforge.service import (
     EvalForgeService,
     IncompatibleRunComparisonError,
     RunComparisonNotFoundError,
+    RunTrendNotFoundError,
     StoredRunComparison,
+    StoredRunTrend,
     SuiteNotFoundError,
 )
 
@@ -213,7 +215,8 @@ def _dashboard_html(runs: tuple[RunSummary, ...]) -> str:
             f"<td><code>{run.run_id}</code></td>"
             f"<td>{escape(run.created_at)}</td>"
             f'<td><a href="/api/v1/reports/{run.run_id}">report</a>'
-            f"{comparison_link(index, run)}</td>"
+            f'{comparison_link(index, run)}<br><a href="/dashboard/trends?run_id='
+            f'{run.run_id}">view history</a></td>'
             "</tr>"
         )
         for index, run in enumerate(runs)
@@ -387,6 +390,61 @@ def _comparison_dashboard_html(comparison: StoredRunComparison) -> str:
 """
 
 
+def _trend_dashboard_html(trend: StoredRunTrend) -> str:
+    rows: list[str] = []
+    previous = None
+    for point in trend.points:
+        comparison = "&mdash;"
+        delta = "&mdash;"
+        if previous is not None:
+            delta = _signed_percent(point.weighted_pass_rate - previous.weighted_pass_rate)
+            comparison = (
+                '<a href="/dashboard/compare?baseline_run_id='
+                f'{previous.run.run_id}&amp;candidate_run_id={point.run.run_id}">'
+                "inspect transition</a>"
+            )
+        rows.append(
+            "<tr>"
+            f'<td><span class="status {("pass" if point.run.release_ready else "fail")}">'
+            f"{'PASS' if point.run.release_ready else 'FAIL'}</span></td>"
+            f"<td><code>{escape(point.run.run_id)}</code></td>"
+            f"<td>{escape(point.run.created_at)}</td>"
+            f"<td>{_percent(point.weighted_pass_rate)}</td>"
+            f"<td>{delta}</td>"
+            f"<td>{comparison}</td>"
+            "</tr>"
+        )
+        previous = point
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EvalForge recorded run trend</title>
+  <style>
+    body {{ font: 16px/1.5 system-ui, sans-serif; margin: 2rem; color: #172033; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ border-bottom: 1px solid #d8deea; padding: .65rem; text-align: left; }}
+    code {{ font-size: .8rem; overflow-wrap: anywhere; }}
+    .status {{ font-weight: 700; }} .pass {{ color: #087a3e; }} .fail {{ color: #b42318; }}
+  </style>
+</head>
+<body>
+  <p><a href="/dashboard">Back to runs</a></p>
+  <h1>Recorded unique-run history</h1>
+  <p>Latest compatible records for <strong>{escape(trend.suite_name)}</strong>, shown oldest
+  to newest. Identical deterministic runs are recorded once. Candidate and expected text
+  are not rendered.</p>
+  <table>
+    <thead><tr><th>Gate</th><th>Run ID</th><th>Recorded</th><th>Weighted pass rate</th>
+    <th>Delta</th><th>Evidence</th></tr></thead>
+    <tbody>{"".join(rows)}</tbody>
+  </table>
+</body>
+</html>
+"""
+
+
 def _secure_dashboard_response(content: str) -> HTMLResponse:
     response = HTMLResponse(content)
     response.headers["Cache-Control"] = "no-store"
@@ -531,6 +589,24 @@ def create_app(
                 message="evaluation runs are not comparable",
             ) from exc
         return _secure_dashboard_response(_comparison_dashboard_html(comparison))
+
+    @app.get("/dashboard/trends", response_class=HTMLResponse, include_in_schema=False)
+    def trend_dashboard(
+        run_id: Annotated[Sha256Digest, Query()],
+        principal: AuthenticatedPrincipal = read_dependency,
+    ) -> HTMLResponse:
+        try:
+            trend = service.get_run_trend(
+                tenant_id=principal.tenant_id,
+                anchor_run_id=run_id,
+            )
+        except RunTrendNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="run_trend_not_found",
+                message="run trend was not found",
+            ) from exc
+        return _secure_dashboard_response(_trend_dashboard_html(trend))
 
     @app.post(
         "/api/v1/suites",
