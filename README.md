@@ -76,6 +76,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Read-only local run dashboard with escaped metadata and no candidate-text rendering
 - Tenant-scoped pairwise run comparison with weighted regressions, case evidence, and category/tag slice deltas
 - Bounded tenant-scoped recorded-run trends with validated weighted pass rates and adjacent pairwise evidence links
+- Tenant-scoped case evidence detail with score, threshold, dimensions, and optional resource evidence but no private text
 - Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
 - Non-root container image, loopback-only Compose deployment, and bounded health smoke
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
@@ -83,7 +84,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API, run dashboard, tenant-scoped pairwise comparison, and bounded compatible-run history are implemented. Current development builds include opt-in authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access. Filtered metric/slice trends and dedicated case-level drill-down remain future work, so the full analytics-dashboard roadmap item is not presented as complete.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API, run dashboard, tenant-scoped pairwise comparison, bounded compatible-run history, and dedicated redacted case evidence are implemented. Current development builds include opt-in authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access. Filtered metric/slice trends remain future work, so the full analytics-dashboard roadmap item is not presented as complete.
 
 ## Quick start
 
@@ -193,13 +194,16 @@ missing-resource, and unexpected errors use redaction-safe envelopes that do not
 prompts, candidate outputs, database details, or exception traces. `/dashboard` provides a
 read-only local run table with report links and same-suite comparison links. The
 `/dashboard/compare` view derives candidate-minus-baseline weighted-pass-rate, metric, case,
-category, tag, and ablation evidence from two immutable tenant-visible runs. Each run also links to
+category, tag, and ablation evidence from two immutable tenant-visible runs. Its case rows link to
+`/dashboard/cases`, which revalidates one tenant-visible run and renders only the selected case's
+score, threshold provenance, weight, severity, category, tags, and optional latency/cost evidence.
+Each run also links to
 `/dashboard/trends?run_id=<digest>`, which revalidates and renders the latest 20 compatible unique
 run records oldest-to-newest with weighted pass rates, deltas, and adjacent pairwise evidence links.
 Identical deterministic runs appear once, and the timestamp is the immutable tenant-membership
-recording time rather than an execution-attempt time. All dashboard views omit raw candidate and
-expected text. These analytics do not invent a comparison release verdict; filtered metric/slice
-trends and dedicated case-level drill-down remain open roadmap work.
+recording time rather than an execution-attempt time. All dashboard views omit prompt, candidate,
+expected, and normalized metric text. These analytics do not invent a comparison release verdict;
+filtered metric/slice trends remain open roadmap work.
 
 Run the deployable server and open `http://127.0.0.1:8000/dashboard`:
 

@@ -21,7 +21,7 @@ uv run --frozen evalforge-smoke \
   --base-url http://127.0.0.1:8000 --timeout-seconds 5
 ```
 
-Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. Runs link to `/dashboard/trends`, which revalidates and renders at most 20 exact-suite, exact-lineage unique records with adjacent `/dashboard/compare` evidence. Identical deterministic reruns appear once, and “Recorded” is the tenant-membership time rather than an execution-attempt time. Comparison renders bounded descriptive regression and slice evidence only after verifying full compatibility. These pages omit candidate and expected text. The OpenAPI document is at `/openapi.json`.
+Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. Runs link to `/dashboard/trends`, which revalidates and renders at most 20 exact-suite, exact-lineage unique records with adjacent `/dashboard/compare` evidence. Identical deterministic reruns appear once, and “Recorded” is the tenant-membership time rather than an execution-attempt time. Comparison renders bounded descriptive regression and slice evidence only after verifying full compatibility, and case rows link to `/dashboard/cases` for one redacted score, threshold, dimension, and optional resource-evidence view. These pages omit prompt, candidate, expected, and normalized metric text. The OpenAPI document is at `/openapi.json`.
 
 ## Container image
 
@@ -88,6 +88,11 @@ run IDs are resolved through tenant membership before compatibility checks. Visi
 the exact suite, dataset lineage, evaluator semantics, and canonicalization version. The view shows
 descriptive deltas rather than a comparison-policy release verdict and caps case, category, and tag
 tables at 100 rows each.
+
+The case-evidence route is also read-only. It resolves the run through tenant membership, revalidates
+the complete persisted report, and returns the same generic not-found envelope for foreign runs,
+absent runs, and absent cases. It renders one bounded metadata projection and never carries prompt,
+candidate, expected, or normalized metric text into the HTML renderer.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 

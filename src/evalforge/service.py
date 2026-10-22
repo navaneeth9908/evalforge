@@ -46,6 +46,10 @@ class RunTrendNotFoundError(LookupError):
     """The trend anchor is not visible to the tenant."""
 
 
+class CaseEvidenceNotFoundError(LookupError):
+    """The requested run or case evidence is not visible to the tenant."""
+
+
 @dataclass(frozen=True)
 class StoredRunComparison:
     """Privacy-safe descriptive analytics over two immutable stored runs."""
@@ -73,6 +77,26 @@ class StoredRunTrend:
     suite_name: str
     anchor_run_id: str
     points: tuple[StoredRunTrendPoint, ...]
+
+
+@dataclass(frozen=True)
+class StoredCaseEvidence:
+    """Bounded privacy-safe evidence for one case in an immutable stored run."""
+
+    suite_name: str
+    run: RunSummary
+    case_id: str
+    passed: bool
+    score: float
+    metric: str
+    threshold: float
+    threshold_source: str
+    weight: float
+    severity: str
+    category: str
+    tags: tuple[str, ...]
+    latency_ms: int | None
+    cost_micro_usd: int | None
 
 
 def _validated_persisted_report(stored: StoredRun) -> PersistedEvaluationReport:
@@ -296,4 +320,39 @@ class EvalForgeService:
             suite_name=anchor.suite_name,
             anchor_run_id=anchor.run_id,
             points=tuple(points),
+        )
+
+    def get_case_evidence(
+        self,
+        *,
+        tenant_id: str,
+        run_id: str,
+        case_id: str,
+    ) -> StoredCaseEvidence:
+        """Return a redacted case projection from one tenant-visible validated run."""
+
+        stored = self.registry.get_run(tenant_id=tenant_id, run_id=run_id)
+        if stored is None:
+            raise CaseEvidenceNotFoundError("case evidence was not found")
+        report = _validated_persisted_report(stored)
+        result = next((item for item in report.results if item.case_id == case_id), None)
+        if result is None:
+            raise CaseEvidenceNotFoundError("case evidence was not found")
+        return StoredCaseEvidence(
+            suite_name=stored.suite_name,
+            run=stored.summary(),
+            case_id=result.case_id,
+            passed=result.passed,
+            score=result.score,
+            metric=result.metric,
+            threshold=result.threshold,
+            threshold_source=result.threshold_source,
+            weight=result.weight,
+            severity=result.severity,
+            category=result.category,
+            tags=result.tags,
+            latency_ms=result.performance.latency_ms if result.performance is not None else None,
+            cost_micro_usd=(
+                result.performance.cost_micro_usd if result.performance is not None else None
+            ),
         )

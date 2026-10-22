@@ -275,6 +275,10 @@ def test_dashboard_compares_persisted_runs_without_rendering_private_outputs(
     assert candidate["run_id"] in dashboard.text
     assert "Weighted pass rate" in dashboard.text
     assert "critical-policy" in dashboard.text
+    assert (
+        f"/dashboard/cases?run_id={candidate['run_id']}&amp;case_id=critical-policy"
+        in dashboard.text
+    )
     assert "regression" in dashboard.text
     assert "Category slices" in dashboard.text
     assert "critical-path" in dashboard.text
@@ -296,6 +300,136 @@ def test_dashboard_compares_persisted_runs_without_rendering_private_outputs(
     )
     assert dashboard.headers["x-content-type-options"] == "nosniff"
     assert dashboard.headers["referrer-policy"] == "no-referrer"
+
+
+def test_dashboard_case_detail_renders_bounded_evidence_without_private_text(
+    tmp_path: Path,
+) -> None:
+    from evalforge.api import create_app
+
+    private_case_id = 'case</td><script>alert("case")</script>'
+    suite_payload = {
+        "schema_version": 1,
+        "name": 'detail-</strong><script>alert("suite")</script>',
+        "minimum_pass_rate": 1.0,
+        "cases": [
+            {
+                "case_id": private_case_id,
+                "prompt": "private prompt must not render",
+                "expected_output": "private expected must not render",
+                "threshold": 0.75,
+                "weight": 2,
+                "severity": "critical",
+                "category": "policy",
+                "tags": ["customer-impact", "regression"],
+            }
+        ],
+    }
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        suite = client.post("/api/v1/suites", json=suite_payload).json()
+        evaluation = client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_id": suite["suite_id"],
+                "candidate_outputs": {
+                    private_case_id: {
+                        "output": "private candidate must not render",
+                        "latency_ms": 123,
+                        "cost_micro_usd": 456,
+                    }
+                },
+            },
+        ).json()
+        response = client.get(
+            "/dashboard/cases",
+            params={"run_id": evaluation["run_id"], "case_id": private_case_id},
+        )
+
+    assert response.status_code == 200
+    assert "EvalForge case evidence" in response.text
+    assert evaluation["run_id"] in response.text
+    assert (
+        "detail-&lt;/strong&gt;&lt;script&gt;alert(&quot;suite&quot;)&lt;/script&gt;"
+        in response.text
+    )
+    assert "case&lt;/td&gt;&lt;script&gt;alert(&quot;case&quot;)&lt;/script&gt;" in response.text
+    assert "FAIL" in response.text
+    assert "0.00%" in response.text
+    assert "75.00%" in response.text
+    assert "case" in response.text
+    assert "critical" in response.text
+    assert "policy" in response.text
+    assert "customer-impact" in response.text
+    assert "regression" in response.text
+    assert "123 ms" in response.text
+    assert "456 micro-USD" in response.text
+    for private_value in (
+        "private prompt must not render",
+        "private expected must not render",
+        "private candidate must not render",
+    ):
+        assert private_value not in response.text
+    assert "</td><script>" not in response.text
+    assert "</strong><script>" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-security-policy"].startswith("default-src 'none'")
+
+
+def test_dashboard_case_detail_treats_absent_case_as_missing_evidence(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        suite = client.post("/api/v1/suites", json=_suite("case-detail-missing")).json()
+        run_id = client.post(
+            "/api/v1/evaluations",
+            json={"suite_id": suite["suite_id"], "candidate_outputs": {"policy": "Allowed"}},
+        ).json()["run_id"]
+        response = client.get(
+            "/dashboard/cases",
+            params={"run_id": run_id, "case_id": "absent-private-case"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {"code": "case_evidence_not_found", "message": "case evidence was not found"}
+    }
+    assert "case-detail-missing" not in response.text
+
+
+def test_dashboard_case_detail_fails_closed_when_stored_evidence_is_corrupt(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    from dataclasses import replace
+
+    from evalforge.api import create_app
+
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        suite = client.post("/api/v1/suites", json=_suite("case-detail-corrupt")).json()
+        run_id = client.post(
+            "/api/v1/evaluations",
+            json={"suite_id": suite["suite_id"], "candidate_outputs": {"policy": "Allowed"}},
+        ).json()["run_id"]
+        stored = app.state.service.registry.get_run(tenant_id="__local__", run_id=run_id)
+        assert stored is not None
+        corrupt = replace(stored, candidate={"policy": "private-corrupt-case-value"})
+        monkeypatch.setattr(  # type: ignore[attr-defined]
+            app.state.service.registry,
+            "get_run",
+            lambda **_kwargs: corrupt,
+        )
+
+        response = client.get(
+            "/dashboard/cases",
+            params={"run_id": run_id, "case_id": "policy"},
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {"code": "internal_error", "message": "internal service error"}
+    }
+    assert "private-corrupt-case-value" not in response.text
 
 
 def test_dashboard_comparison_rejects_visible_runs_from_different_suites(tmp_path: Path) -> None:

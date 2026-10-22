@@ -74,6 +74,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "/dashboard" in readme
     assert "/dashboard/compare" in readme
     assert "/dashboard/trends" in readme
+    assert "/dashboard/cases" in readme
+    assert "dedicated case-level drill-down remain future work" not in readme
 
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
         "version"
@@ -115,9 +117,11 @@ def test_release_documentation_is_complete_and_truthful() -> None:
         "with trusted-local legacy migration" in acceptance
     )
     assert (
-        "Full regression analytics dashboard | Partial: tenant-scoped pairwise comparison and "
-        "bounded compatible unique-run history" in acceptance
+        "Full regression analytics dashboard | Partial: tenant-scoped pairwise comparison, "
+        "bounded compatible unique-run history, and dedicated redacted case-level evidence detail "
+        "are implemented; filtered metric/slice trends remain open" in acceptance
     )
+    assert "dedicated redacted case-level evidence detail" in acceptance
     assert "M4 local operations and release hardening | Complete" in acceptance
     assert "M5 governed semantic similarity and embedding metrics | Complete" in acceptance
     assert "M5 task-specific code harness evaluation | Complete" in acceptance
@@ -154,6 +158,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [ ] Full analyst dashboard" in roadmap
     assert "- [x] Tenant-scoped pairwise run comparison" in roadmap
     assert "- [x] Bounded compatible unique-run history" in roadmap
+    assert "- [x] Dedicated redacted case-level evidence detail" in roadmap
 
     architecture = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     assert "cross-dataset scorecard" in architecture.lower()

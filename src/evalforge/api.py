@@ -5,6 +5,7 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Query, Request, Security, status
 from fastapi.exceptions import RequestValidationError
@@ -28,10 +29,12 @@ from evalforge.contracts import (
 )
 from evalforge.registry import RunSummary, SQLiteRunRegistry, StoredRun
 from evalforge.service import (
+    CaseEvidenceNotFoundError,
     EvalForgeService,
     IncompatibleRunComparisonError,
     RunComparisonNotFoundError,
     RunTrendNotFoundError,
+    StoredCaseEvidence,
     StoredRunComparison,
     StoredRunTrend,
     SuiteNotFoundError,
@@ -276,7 +279,13 @@ def _comparison_dashboard_html(comparison: StoredRunComparison) -> str:
     case_rows = "".join(
         (
             "<tr>"
-            f"<td>{escape(delta.case_id)}</td>"
+            f"<td>{escape(delta.case_id)}<br>"
+            '<a href="/dashboard/cases?run_id='
+            f'{comparison.baseline.run_id}&amp;case_id={escape(quote(delta.case_id, safe=""))}">'
+            "baseline evidence</a> · "
+            '<a href="/dashboard/cases?run_id='
+            f'{comparison.candidate.run_id}&amp;case_id={escape(quote(delta.case_id, safe=""))}">'
+            "candidate evidence</a></td>"
             f"<td>{escape(delta.metric)}</td>"
             f"<td>{_percent(delta.baseline_score)}</td>"
             f"<td>{_percent(delta.candidate_score)}</td>"
@@ -445,6 +454,56 @@ def _trend_dashboard_html(trend: StoredRunTrend) -> str:
 """
 
 
+def _case_evidence_dashboard_html(evidence: StoredCaseEvidence) -> str:
+    tags = ", ".join(escape(tag) for tag in evidence.tags) if evidence.tags else "none"
+    performance_rows = ""
+    if evidence.latency_ms is not None and evidence.cost_micro_usd is not None:
+        performance_rows = (
+            f"<tr><th>Latency</th><td>{evidence.latency_ms} ms</td></tr>"
+            f"<tr><th>Cost</th><td>{evidence.cost_micro_usd} micro-USD</td></tr>"
+        )
+    result_class = "pass" if evidence.passed else "fail"
+    result_label = "PASS" if evidence.passed else "FAIL"
+    threshold = f"{_percent(evidence.threshold)} ({escape(evidence.threshold_source)})"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EvalForge case evidence</title>
+  <style>
+    body {{ font: 16px/1.5 system-ui, sans-serif; margin: 2rem; color: #172033; }}
+    table {{ border-collapse: collapse; width: min(100%, 52rem); }}
+    th, td {{ border-bottom: 1px solid #d8deea; padding: .65rem; text-align: left; }}
+    code {{ font-size: .8rem; overflow-wrap: anywhere; }}
+    .status {{ font-weight: 700; }} .pass {{ color: #087a3e; }} .fail {{ color: #b42318; }}
+  </style>
+</head>
+<body>
+  <p><a href="/dashboard">Back to runs</a></p>
+  <h1>EvalForge case evidence</h1>
+  <p>Redacted deterministic evidence for <strong>{escape(evidence.suite_name)}</strong>.
+  Candidate, expected, prompt, and normalized metric text are not rendered.</p>
+  <table>
+    <tbody>
+      <tr><th>Run ID</th><td><code>{escape(evidence.run.run_id)}</code></td></tr>
+      <tr><th>Case ID</th><td>{escape(evidence.case_id)}</td></tr>
+      <tr><th>Result</th><td><span class="status {result_class}">{result_label}</span></td></tr>
+      <tr><th>Metric</th><td>{escape(evidence.metric)}</td></tr>
+      <tr><th>Score</th><td>{_percent(evidence.score)}</td></tr>
+      <tr><th>Threshold</th><td>{threshold}</td></tr>
+      <tr><th>Weight</th><td>{evidence.weight:g}</td></tr>
+      <tr><th>Severity</th><td>{escape(evidence.severity)}</td></tr>
+      <tr><th>Category</th><td>{escape(evidence.category)}</td></tr>
+      <tr><th>Tags</th><td>{tags}</td></tr>
+      {performance_rows}
+    </tbody>
+  </table>
+</body>
+</html>
+"""
+
+
 def _secure_dashboard_response(content: str) -> HTMLResponse:
     response = HTMLResponse(content)
     response.headers["Cache-Control"] = "no-store"
@@ -607,6 +666,26 @@ def create_app(
                 message="run trend was not found",
             ) from exc
         return _secure_dashboard_response(_trend_dashboard_html(trend))
+
+    @app.get("/dashboard/cases", response_class=HTMLResponse, include_in_schema=False)
+    def case_evidence_dashboard(
+        run_id: Annotated[Sha256Digest, Query()],
+        case_id: Annotated[str, Query(min_length=1, max_length=128)],
+        principal: AuthenticatedPrincipal = read_dependency,
+    ) -> HTMLResponse:
+        try:
+            evidence = service.get_case_evidence(
+                tenant_id=principal.tenant_id,
+                run_id=run_id,
+                case_id=case_id,
+            )
+        except CaseEvidenceNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="case_evidence_not_found",
+                message="case evidence was not found",
+            ) from exc
+        return _secure_dashboard_response(_case_evidence_dashboard_html(evidence))
 
     @app.post(
         "/api/v1/suites",

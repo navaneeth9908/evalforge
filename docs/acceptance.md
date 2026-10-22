@@ -25,6 +25,7 @@ This page maps the release contract to executable evidence. A checked item means
 | Tenant-scoped suites, runs, reports, and dashboard views | `tests/test_tenant_isolation.py`, migration and immutability cases in `tests/test_registry.py` | Verified on `main` |
 | Tenant-scoped pairwise run comparison with redacted regression and slice evidence | `tests/test_comparison.py`, `tests/test_api.py`, and foreign/absent cases in `tests/test_tenant_isolation.py` | Verified on `main` |
 | Tenant-scoped compatible unique-run history with validated scores and pairwise drill-down links | Trend, corruption, and foreign/absent cases in `tests/test_api.py` and `tests/test_tenant_isolation.py` | Verified on `main` |
+| Tenant-scoped dedicated redacted case-level evidence detail | Rendered metadata/resource, private-text omission, missing-case, and foreign/absent-run cases in `tests/test_api.py` and `tests/test_tenant_isolation.py` | Verified on `main` |
 
 Run the complete credential-free tracer bullet:
 
@@ -52,7 +53,7 @@ The release includes the deterministic core and the implemented local operations
 | M5 dataset mutation and adversarial test-case generation | Complete |
 | M5 cross-dataset scorecards and long-horizon trends | Complete |
 | Basic local run dashboard | Complete |
-| Full regression analytics dashboard | Partial: tenant-scoped pairwise comparison and bounded compatible unique-run history are implemented; filtered metric/slice trends and dedicated case-level drill-down remain open |
+| Full regression analytics dashboard | Partial: tenant-scoped pairwise comparison, bounded compatible unique-run history, and dedicated redacted case-level evidence detail are implemented; filtered metric/slice trends remain open |
 | Authentication and multi-tenancy | Implemented on `main`: bearer authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access with trusted-local legacy migration |
 | Production hosted control plane and distributed workers | Not implemented |
 | Artifact signing and SBOM publication | Not implemented |

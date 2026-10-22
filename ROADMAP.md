@@ -80,7 +80,8 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Tenant-scoped pairwise run comparison with metric, case, category, tag, and ablation evidence
   - [ ] Historical trend exploration and deeper evidence drill-down
     - [x] Bounded compatible unique-run history with adjacent pairwise evidence links
-    - [ ] Filtered metric/slice trends and dedicated case-level evidence detail
+    - [ ] Filtered metric/slice trends
+    - [x] Dedicated redacted case-level evidence detail
 - [ ] Hosted API workers, queues, retries, and distributed execution
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics
