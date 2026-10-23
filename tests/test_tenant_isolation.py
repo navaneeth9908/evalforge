@@ -280,12 +280,17 @@ def test_run_trend_treats_foreign_and_absent_anchor_ids_identically(tmp_path: Pa
         foreign = client.get(
             "/dashboard/trends",
             headers=_authorization(beta_token),
-            params={"run_id": alpha_run},
+            params=[
+                ("run_id", alpha_run),
+                ("metric", "bogus"),
+                ("metric", "exact"),
+                ("category", "BAD"),
+            ],
         )
         absent = client.get(
             "/dashboard/trends",
             headers=_authorization(beta_token),
-            params={"run_id": "0" * 64},
+            params={"run_id": "0" * 64, "tag": "absent"},
         )
 
     expected = {"error": {"code": "run_trend_not_found", "message": "run trend was not found"}}

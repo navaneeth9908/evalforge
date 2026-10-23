@@ -76,6 +76,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Read-only local run dashboard with escaped metadata and no candidate-text rendering
 - Tenant-scoped pairwise run comparison with weighted regressions, case evidence, and category/tag slice deltas
 - Bounded tenant-scoped recorded-run trends with validated weighted pass rates and adjacent pairwise evidence links
+- Tenant-scoped filtered metric, category, and tag trends with fail-closed dimension selection
 - Tenant-scoped case evidence detail with score, threshold, dimensions, and optional resource evidence but no private text
 - Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
 - Non-root container image, loopback-only Compose deployment, and bounded health smoke
@@ -84,7 +85,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API, run dashboard, tenant-scoped pairwise comparison, bounded compatible-run history, and dedicated redacted case evidence are implemented. Current development builds include opt-in authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access. Filtered metric/slice trends remain future work, so the full analytics-dashboard roadmap item is not presented as complete.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access.
 
 ## Quick start
 
@@ -200,10 +201,13 @@ score, threshold provenance, weight, severity, category, tags, and optional late
 Each run also links to
 `/dashboard/trends?run_id=<digest>`, which revalidates and renders the latest 20 compatible unique
 run records oldest-to-newest with weighted pass rates, deltas, and adjacent pairwise evidence links.
+Comparison metric, category, and tag rows link to the same route with one mutually exclusive filter.
+`metric` shows the weighted mean case score for that metric; `category` and `tag` show the stored
+weighted pass rate for the selected slice. Unknown dimensions fail closed without rendering a
+fallback aggregate, and ambiguous multi-filter requests are rejected.
 Identical deterministic runs appear once, and the timestamp is the immutable tenant-membership
 recording time rather than an execution-attempt time. All dashboard views omit prompt, candidate,
-expected, and normalized metric text. These analytics do not invent a comparison release verdict;
-filtered metric/slice trends remain open roadmap work.
+expected, and normalized metric text. These analytics do not invent a comparison release verdict.
 
 Run the deployable server and open `http://127.0.0.1:8000/dashboard`:
 

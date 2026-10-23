@@ -76,6 +76,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "/dashboard/trends" in readme
     assert "/dashboard/cases" in readme
     assert "dedicated case-level drill-down remain future work" not in readme
+    assert "filtered metric, category, and tag trends" in readme
 
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
         "version"
@@ -117,9 +118,9 @@ def test_release_documentation_is_complete_and_truthful() -> None:
         "with trusted-local legacy migration" in acceptance
     )
     assert (
-        "Full regression analytics dashboard | Partial: tenant-scoped pairwise comparison, "
-        "bounded compatible unique-run history, and dedicated redacted case-level evidence detail "
-        "are implemented; filtered metric/slice trends remain open" in acceptance
+        "Full regression analytics dashboard | Complete: tenant-scoped pairwise comparison, "
+        "bounded compatible unique-run history, filtered metric/category/tag trends, and dedicated "
+        "redacted case-level evidence detail" in acceptance
     )
     assert "dedicated redacted case-level evidence detail" in acceptance
     assert "M4 local operations and release hardening | Complete" in acceptance
@@ -155,9 +156,10 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "[x] Structured-output evaluator beyond current contracts" in roadmap
     assert "[x] Dataset mutation and adversarial test-case generation" in roadmap
     assert "[x] Cross-dataset scorecards and long-horizon trend analysis" in roadmap
-    assert "- [ ] Full analyst dashboard" in roadmap
+    assert "- [x] Full analyst dashboard" in roadmap
     assert "- [x] Tenant-scoped pairwise run comparison" in roadmap
     assert "- [x] Bounded compatible unique-run history" in roadmap
+    assert "- [x] Filtered metric/slice trends" in roadmap
     assert "- [x] Dedicated redacted case-level evidence detail" in roadmap
 
     architecture = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
@@ -169,6 +171,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     deployment = (ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
     assert "--factory evalforge.server:create_app_from_environment" in deployment
     assert "evalforge-smoke --base-url http://127.0.0.1:8000" in deployment
+    for filter_query in ("?metric=", "?category=", "?tag="):
+        assert filter_query in deployment
     assert "evalforge.server:app" not in deployment
     assert "--url " not in deployment
     assert "signal handling is tested" not in deployment

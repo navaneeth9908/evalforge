@@ -21,7 +21,7 @@ uv run --frozen evalforge-smoke \
   --base-url http://127.0.0.1:8000 --timeout-seconds 5
 ```
 
-Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. Runs link to `/dashboard/trends`, which revalidates and renders at most 20 exact-suite, exact-lineage unique records with adjacent `/dashboard/compare` evidence. Identical deterministic reruns appear once, and “Recorded” is the tenant-membership time rather than an execution-attempt time. Comparison renders bounded descriptive regression and slice evidence only after verifying full compatibility, and case rows link to `/dashboard/cases` for one redacted score, threshold, dimension, and optional resource-evidence view. These pages omit prompt, candidate, expected, and normalized metric text. The OpenAPI document is at `/openapi.json`.
+Open `http://127.0.0.1:8000/dashboard` for the read-only run summary. Runs link to `/dashboard/trends`, which revalidates and renders at most 20 exact-suite, exact-lineage unique records with adjacent `/dashboard/compare` evidence. Comparison rows link to filtered histories; use exactly one of the `?metric=`, `?category=`, or `?tag=` selectors alongside `run_id`. Metric filters show weighted mean case scores, while category and tag filters show weighted slice pass rates. Unknown dimensions and ambiguous selector combinations fail closed. Identical deterministic reruns appear once, and “Recorded” is the tenant-membership time rather than an execution-attempt time. Comparison renders bounded descriptive regression and slice evidence only after verifying full compatibility, and case rows link to `/dashboard/cases` for one redacted score, threshold, dimension, and optional resource-evidence view. These pages omit prompt, candidate, expected, and normalized metric text. The OpenAPI document is at `/openapi.json`.
 
 ## Container image
 
@@ -87,7 +87,9 @@ The pairwise comparison route is read-only and available to reader, editor, and 
 run IDs are resolved through tenant membership before compatibility checks. Visible runs must share
 the exact suite, dataset lineage, evaluator semantics, and canonicalization version. The view shows
 descriptive deltas rather than a comparison-policy release verdict and caps case, category, and tag
-tables at 100 rows each.
+tables at 100 rows each. Metric and slice names link to a tenant-scoped trend projection. Trend
+authorization resolves the anchor before interpreting filters, preserves the 20-point cap, and
+revalidates every stored report before deriving the selected score.
 
 The case-evidence route is also read-only. It resolves the run through tenant membership, revalidates
 the complete persisted report, and returns the same generic not-found envelope for foreign runs,

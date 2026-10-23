@@ -524,6 +524,185 @@ def test_dashboard_trend_chains_recorded_runs_into_pairwise_evidence(
     assert "view history" in run_dashboard.text
 
 
+def test_dashboard_trend_filters_recorded_scores_by_metric(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    suite_payload = {
+        "schema_version": 1,
+        "name": "filtered-metric-trend",
+        "minimum_pass_rate": 0.0,
+        "cases": [
+            {
+                "case_id": "exact-policy",
+                "prompt": "State the private policy.",
+                "expected_output": "Allowed",
+                "metric": "exact",
+                "weight": 3,
+                "category": "policy",
+                "tags": ["critical-path"],
+            },
+            {
+                "case_id": "context",
+                "prompt": "Include the private context.",
+                "expected_output": "context",
+                "metric": "contains",
+                "category": "quality",
+                "tags": ["supporting"],
+            },
+        ],
+    }
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        suite = client.post("/api/v1/suites", json=suite_payload).json()
+        run_ids = [
+            client.post(
+                "/api/v1/evaluations",
+                json={"suite_id": suite["suite_id"], "candidate_outputs": outputs},
+            ).json()["run_id"]
+            for outputs in (
+                {"exact-policy": "Allowed", "context": "private context one"},
+                {"exact-policy": "Denied", "context": "private context two"},
+                {"exact-policy": "Allowed", "context": "private omission"},
+            )
+        ]
+        response = client.get(
+            "/dashboard/trends",
+            params={"run_id": run_ids[-1], "metric": "exact"},
+        )
+        comparison = client.get(
+            "/dashboard/compare",
+            params={"baseline_run_id": run_ids[0], "candidate_run_id": run_ids[1]},
+        )
+
+    assert response.status_code == 200
+    assert "Metric weighted mean: <strong>exact</strong>" in response.text
+    assert response.text.count("<td>100.00%</td>") == 2
+    assert response.text.count("<td>0.00%</td>") == 1
+    assert "-100.00%" in response.text
+    assert "+100.00%" in response.text
+    assert "private context" not in response.text
+    assert f"/dashboard/trends?run_id={run_ids[1]}&amp;metric=exact" in comparison.text
+
+
+def test_dashboard_trend_filters_recorded_scores_by_category_and_tag(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    suite_payload = {
+        "schema_version": 1,
+        "name": "filtered-slice-trend",
+        "minimum_pass_rate": 0.0,
+        "cases": [
+            {
+                "case_id": "policy",
+                "prompt": "State the private policy.",
+                "expected_output": "Allowed",
+                "weight": 3,
+                "category": "policy",
+                "tags": ["critical-path"],
+            },
+            {
+                "case_id": "quality",
+                "prompt": "State the private context.",
+                "expected_output": "Context",
+                "category": "quality",
+                "tags": ["supporting"],
+            },
+        ],
+    }
+    with TestClient(create_app(tmp_path / "api.db")) as client:
+        suite = client.post("/api/v1/suites", json=suite_payload).json()
+        run_ids = [
+            client.post(
+                "/api/v1/evaluations",
+                json={"suite_id": suite["suite_id"], "candidate_outputs": outputs},
+            ).json()["run_id"]
+            for outputs in (
+                {"policy": "Allowed", "quality": "Context"},
+                {"policy": "Denied", "quality": "Context"},
+                {"policy": "Allowed", "quality": "Missing"},
+            )
+        ]
+        category = client.get(
+            "/dashboard/trends",
+            params={"run_id": run_ids[-1], "category": "quality"},
+        )
+        tag = client.get(
+            "/dashboard/trends",
+            params={"run_id": run_ids[-1], "tag": "critical-path"},
+        )
+        comparison = client.get(
+            "/dashboard/compare",
+            params={"baseline_run_id": run_ids[0], "candidate_run_id": run_ids[1]},
+        )
+
+    assert category.status_code == tag.status_code == 200
+    assert "Category weighted pass rate: <strong>quality</strong>" in category.text
+    assert category.text.count("<td>100.00%</td>") == 2
+    assert category.text.count("<td>0.00%</td>") == 1
+    assert "Tag weighted pass rate: <strong>critical-path</strong>" in tag.text
+    assert tag.text.count("<td>100.00%</td>") == 2
+    assert tag.text.count("<td>0.00%</td>") == 1
+    assert "private" not in category.text
+    assert "private" not in tag.text
+    assert f"/dashboard/trends?run_id={run_ids[1]}&amp;category=policy" in comparison.text
+    assert f"/dashboard/trends?run_id={run_ids[1]}&amp;tag=critical-path" in comparison.text
+
+
+def test_dashboard_trend_rejects_unknown_or_ambiguous_filters(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(create_app(tmp_path / "api.db"), raise_server_exceptions=False) as client:
+        suite = client.post("/api/v1/suites", json=_suite("trend-filter-errors")).json()
+        run_id = client.post(
+            "/api/v1/evaluations",
+            json={"suite_id": suite["suite_id"], "candidate_outputs": {"policy": "Allowed"}},
+        ).json()["run_id"]
+        unknown_responses = (
+            client.get("/dashboard/trends", params={"run_id": run_id, "metric": "regex"}),
+            client.get("/dashboard/trends", params={"run_id": run_id, "category": "absent"}),
+            client.get("/dashboard/trends", params={"run_id": run_id, "tag": "absent"}),
+        )
+        ambiguous = client.get(
+            "/dashboard/trends",
+            params={"run_id": run_id, "metric": "exact", "category": "uncategorized"},
+        )
+        duplicate_responses = (
+            client.get(
+                "/dashboard/trends",
+                params=[("run_id", run_id), ("metric", "exact"), ("metric", "contains")],
+            ),
+            client.get(
+                "/dashboard/trends",
+                params=[("run_id", run_id), ("category", "uncategorized"), ("category", "absent")],
+            ),
+            client.get(
+                "/dashboard/trends",
+                params=[("run_id", run_id), ("tag", "first"), ("tag", "second")],
+            ),
+        )
+        malformed_responses = (
+            client.get("/dashboard/trends", params={"run_id": run_id, "metric": "bogus"}),
+            client.get("/dashboard/trends", params={"run_id": run_id, "category": "BAD"}),
+        )
+
+    expected_unknown = {
+        "error": {"code": "run_trend_filter_not_found", "message": "trend filter was not found"}
+    }
+    assert all(response.status_code == 404 for response in unknown_responses)
+    assert all(response.json() == expected_unknown for response in unknown_responses)
+    expected_invalid = {
+        "error": {
+            "code": "invalid_run_trend_filter",
+            "message": "trend filter is invalid or ambiguous",
+        }
+    }
+    assert ambiguous.status_code == 400
+    assert ambiguous.json() == expected_invalid
+    assert all(response.status_code == 400 for response in duplicate_responses)
+    assert all(response.json() == expected_invalid for response in duplicate_responses)
+    assert all(response.status_code == 400 for response in malformed_responses)
+    assert all(response.json() == expected_invalid for response in malformed_responses)
+
+
 def test_dashboard_trend_fails_closed_when_stored_history_is_corrupt(
     tmp_path: Path,
     monkeypatch: object,

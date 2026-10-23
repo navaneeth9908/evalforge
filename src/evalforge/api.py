@@ -32,7 +32,9 @@ from evalforge.service import (
     CaseEvidenceNotFoundError,
     EvalForgeService,
     IncompatibleRunComparisonError,
+    InvalidRunTrendFilterError,
     RunComparisonNotFoundError,
+    RunTrendFilterNotFoundError,
     RunTrendNotFoundError,
     StoredCaseEvidence,
     StoredRunComparison,
@@ -267,7 +269,9 @@ def _comparison_dashboard_html(comparison: StoredRunComparison) -> str:
     metric_rows = "".join(
         (
             "<tr>"
-            f"<td>{escape(delta.metric)}</td>"
+            '<td><a href="/dashboard/trends?run_id='
+            f'{comparison.candidate.run_id}&amp;metric={escape(quote(delta.metric, safe=""))}">'
+            f"{escape(delta.metric)}</a></td>"
             f"<td>{_percent(delta.baseline_score)}</td>"
             f"<td>{_percent(delta.candidate_score)}</td>"
             f"<td>{_signed_percent(delta.absolute_delta)}</td>"
@@ -298,7 +302,9 @@ def _comparison_dashboard_html(comparison: StoredRunComparison) -> str:
     category_rows = "".join(
         (
             "<tr>"
-            f"<td>{escape(delta.name)}</td>"
+            '<td><a href="/dashboard/trends?run_id='
+            f'{comparison.candidate.run_id}&amp;category={escape(quote(delta.name, safe=""))}">'
+            f"{escape(delta.name)}</a></td>"
             f"<td>{_percent(delta.baseline_score)}</td>"
             f"<td>{_percent(delta.candidate_score)}</td>"
             f"<td>{_signed_percent(delta.absolute_delta)}</td>"
@@ -310,7 +316,9 @@ def _comparison_dashboard_html(comparison: StoredRunComparison) -> str:
     tag_rows = "".join(
         (
             "<tr>"
-            f"<td>{escape(delta.name)}</td>"
+            '<td><a href="/dashboard/trends?run_id='
+            f'{comparison.candidate.run_id}&amp;tag={escape(quote(delta.name, safe=""))}">'
+            f"{escape(delta.name)}</a></td>"
             f"<td>{_percent(delta.baseline_score)}</td>"
             f"<td>{_percent(delta.candidate_score)}</td>"
             f"<td>{_signed_percent(delta.absolute_delta)}</td>"
@@ -406,7 +414,7 @@ def _trend_dashboard_html(trend: StoredRunTrend) -> str:
         comparison = "&mdash;"
         delta = "&mdash;"
         if previous is not None:
-            delta = _signed_percent(point.weighted_pass_rate - previous.weighted_pass_rate)
+            delta = _signed_percent(point.score - previous.score)
             comparison = (
                 '<a href="/dashboard/compare?baseline_run_id='
                 f'{previous.run.run_id}&amp;candidate_run_id={point.run.run_id}">'
@@ -418,12 +426,26 @@ def _trend_dashboard_html(trend: StoredRunTrend) -> str:
             f"{'PASS' if point.run.release_ready else 'FAIL'}</span></td>"
             f"<td><code>{escape(point.run.run_id)}</code></td>"
             f"<td>{escape(point.run.created_at)}</td>"
-            f"<td>{_percent(point.weighted_pass_rate)}</td>"
+            f"<td>{_percent(point.score)}</td>"
             f"<td>{delta}</td>"
             f"<td>{comparison}</td>"
             "</tr>"
         )
         previous = point
+    if trend.filter_kind == "overall":
+        score_description = "Overall weighted pass rate"
+        score_heading = "Weighted pass rate"
+    elif trend.filter_kind == "metric":
+        score_description = (
+            f"Metric weighted mean: <strong>{escape(trend.filter_value or '')}</strong>"
+        )
+        score_heading = "Weighted mean score"
+    else:
+        score_description = (
+            f"{trend.filter_kind.title()} weighted pass rate: "
+            f"<strong>{escape(trend.filter_value or '')}</strong>"
+        )
+        score_heading = "Weighted pass rate"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -444,8 +466,9 @@ def _trend_dashboard_html(trend: StoredRunTrend) -> str:
   <p>Latest compatible records for <strong>{escape(trend.suite_name)}</strong>, shown oldest
   to newest. Identical deterministic runs are recorded once. Candidate and expected text
   are not rendered.</p>
+  <p>{score_description}</p>
   <table>
-    <thead><tr><th>Gate</th><th>Run ID</th><th>Recorded</th><th>Weighted pass rate</th>
+    <thead><tr><th>Gate</th><th>Run ID</th><th>Recorded</th><th>{score_heading}</th>
     <th>Delta</th><th>Evidence</th></tr></thead>
     <tbody>{"".join(rows)}</tbody>
   </table>
@@ -651,6 +674,7 @@ def create_app(
 
     @app.get("/dashboard/trends", response_class=HTMLResponse, include_in_schema=False)
     def trend_dashboard(
+        request: Request,
         run_id: Annotated[Sha256Digest, Query()],
         principal: AuthenticatedPrincipal = read_dependency,
     ) -> HTMLResponse:
@@ -658,12 +682,27 @@ def create_app(
             trend = service.get_run_trend(
                 tenant_id=principal.tenant_id,
                 anchor_run_id=run_id,
+                metric=tuple(request.query_params.getlist("metric")),
+                category=tuple(request.query_params.getlist("category")),
+                tag=tuple(request.query_params.getlist("tag")),
             )
         except RunTrendNotFoundError as exc:
             raise APIError(
                 status_code=404,
                 code="run_trend_not_found",
                 message="run trend was not found",
+            ) from exc
+        except RunTrendFilterNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="run_trend_filter_not_found",
+                message="trend filter was not found",
+            ) from exc
+        except InvalidRunTrendFilterError as exc:
+            raise APIError(
+                status_code=400,
+                code="invalid_run_trend_filter",
+                message="trend filter is invalid or ambiguous",
             ) from exc
         return _secure_dashboard_response(_trend_dashboard_html(trend))
 

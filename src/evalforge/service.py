@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 from evalforge.comparison import compare_report_scores
 from evalforge.contracts import (
     CandidateOutput,
     EvaluationReport,
     EvaluationSuite,
+    MetricName,
     PersistedEvaluationReport,
     ReportScoreComparison,
 )
@@ -29,6 +31,8 @@ from evalforge.registry import (
     StoredSuite,
 )
 
+_SLICE_FILTER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
 
 class SuiteNotFoundError(LookupError):
     """A requested suite digest is not present in local storage."""
@@ -44,6 +48,14 @@ class IncompatibleRunComparisonError(ValueError):
 
 class RunTrendNotFoundError(LookupError):
     """The trend anchor is not visible to the tenant."""
+
+
+class RunTrendFilterNotFoundError(LookupError):
+    """A requested metric or slice is absent from the visible evaluation contract."""
+
+
+class InvalidRunTrendFilterError(ValueError):
+    """A trend request selected more than one mutually exclusive dimension."""
 
 
 class CaseEvidenceNotFoundError(LookupError):
@@ -67,7 +79,7 @@ class StoredRunTrendPoint:
     """One validated, redacted point in recorded unique-run history."""
 
     run: RunSummary
-    weighted_pass_rate: float
+    score: float
 
 
 @dataclass(frozen=True)
@@ -76,6 +88,8 @@ class StoredRunTrend:
 
     suite_name: str
     anchor_run_id: str
+    filter_kind: Literal["overall", "metric", "category", "tag"]
+    filter_value: str | None
     points: tuple[StoredRunTrendPoint, ...]
 
 
@@ -148,6 +162,43 @@ def _validated_persisted_report(stored: StoredRun) -> PersistedEvaluationReport:
     ):
         raise RuntimeError("stored evaluation report failed derived evidence validation")
     return report
+
+
+def _metric_weighted_mean(report: EvaluationReport, metric: MetricName) -> float:
+    results = tuple(result for result in report.results if result.metric == metric)
+    if not results:
+        raise ValueError("trend metric is not represented by the evaluation suite")
+    total_weight = sum(result.weight for result in results)
+    return sum(result.score * result.weight for result in results) / total_weight
+
+
+def _slice_weighted_pass_rate(
+    report: EvaluationReport,
+    *,
+    kind: Literal["category", "tag"],
+    name: str,
+) -> float:
+    slices = report.category_slices if kind == "category" else report.tag_slices
+    match = next((item for item in slices if item.name == name), None)
+    if match is None:
+        raise ValueError("trend slice is not represented by the evaluation suite")
+    return match.weighted_pass_rate
+
+
+def _trend_score(
+    report: EvaluationReport,
+    *,
+    metric: MetricName | None,
+    category: str | None,
+    tag: str | None,
+) -> float:
+    if metric is not None:
+        return _metric_weighted_mean(report, metric)
+    if category is not None:
+        return _slice_weighted_pass_rate(report, kind="category", name=category)
+    if tag is not None:
+        return _slice_weighted_pass_rate(report, kind="tag", name=tag)
+    return report.weighted_pass_rate
 
 
 class EvalForgeService:
@@ -286,6 +337,9 @@ class EvalForgeService:
         *,
         tenant_id: str,
         anchor_run_id: str,
+        metric: tuple[str, ...] = (),
+        category: tuple[str, ...] = (),
+        tag: tuple[str, ...] = (),
         limit: int = 20,
     ) -> StoredRunTrend:
         """Derive bounded validated history from a tenant-visible anchor run."""
@@ -296,12 +350,45 @@ class EvalForgeService:
         if anchor is None:
             raise RunTrendNotFoundError("run trend was not found")
         anchor_report = _validated_persisted_report(anchor)
+
+        filter_groups = (metric, category, tag)
+        if any(len(values) > 1 for values in filter_groups) or sum(map(bool, filter_groups)) > 1:
+            raise InvalidRunTrendFilterError("trend filter is invalid or ambiguous")
+        raw_metric = metric[0] if metric else None
+        raw_category = category[0] if category else None
+        raw_tag = tag[0] if tag else None
+        if raw_metric is not None and raw_metric not in {"exact", "contains", "regex"}:
+            raise InvalidRunTrendFilterError("trend filter is invalid or ambiguous")
+        if any(
+            value is not None and _SLICE_FILTER_PATTERN.fullmatch(value) is None
+            for value in (raw_category, raw_tag)
+        ):
+            raise InvalidRunTrendFilterError("trend filter is invalid or ambiguous")
+        selected_metric = cast(MetricName | None, raw_metric)
+        try:
+            _trend_score(
+                anchor_report,
+                metric=selected_metric,
+                category=raw_category,
+                tag=raw_tag,
+            )
+        except ValueError as exc:
+            raise RunTrendFilterNotFoundError("trend filter was not found") from exc
+
         stored_runs = self.registry.list_compatible_runs(
             tenant_id=tenant_id,
             suite_sha256=anchor.suite_sha256,
             dataset_manifest_sha256=anchor.dataset_manifest_sha256,
             limit=limit,
         )
+        filter_kind: Literal["overall", "metric", "category", "tag"] = "overall"
+        filter_value: str | None = None
+        if selected_metric is not None:
+            filter_kind, filter_value = "metric", selected_metric
+        elif raw_category is not None:
+            filter_kind, filter_value = "category", raw_category
+        elif raw_tag is not None:
+            filter_kind, filter_value = "tag", raw_tag
         points: list[StoredRunTrendPoint] = []
         for stored in reversed(stored_runs):
             report = _validated_persisted_report(stored)
@@ -310,15 +397,26 @@ class EvalForgeService:
                 or report.canonicalization_version != anchor_report.canonicalization_version
             ):
                 raise RuntimeError("stored trend history failed compatibility validation")
+            try:
+                score = _trend_score(
+                    report,
+                    metric=selected_metric,
+                    category=raw_category,
+                    tag=raw_tag,
+                )
+            except ValueError as exc:
+                raise RuntimeError("stored trend history failed dimension validation") from exc
             points.append(
                 StoredRunTrendPoint(
                     run=stored.summary(),
-                    weighted_pass_rate=report.weighted_pass_rate,
+                    score=score,
                 )
             )
         return StoredRunTrend(
             suite_name=anchor.suite_name,
             anchor_run_id=anchor.run_id,
+            filter_kind=filter_kind,
+            filter_value=filter_value,
             points=tuple(points),
         )
 
