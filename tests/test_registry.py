@@ -145,7 +145,7 @@ def test_registry_applies_migrations_and_safe_connection_defaults(tmp_path: Path
     registry = SQLiteRunRegistry(tmp_path / "history.db")
 
     diagnostics = registry.diagnostics()
-    assert diagnostics.schema_version == 3
+    assert diagnostics.schema_version == 4
     assert diagnostics.foreign_keys is True
     assert diagnostics.journal_mode == "wal"
     assert diagnostics.busy_timeout_ms == 5_000
@@ -170,7 +170,107 @@ def test_registry_applies_migrations_and_safe_connection_defaults(tmp_path: Path
         "candidates",
         "runs",
         "reports",
+        "evaluation_jobs",
     } <= tables
+
+
+def test_evaluation_job_submission_is_idempotent_and_tenant_scoped(tmp_path: Path) -> None:
+    from evalforge.registry import EvaluationJobConflictError, SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "jobs.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+
+    created = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-test-0001",
+    )
+    replayed = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-test-0001",
+    )
+
+    assert replayed == created
+    assert len(created.job_id) == 64
+    assert created.status == "queued"
+    assert created.attempts == 0
+    assert created.max_attempts == 3
+    assert created.run_id is None
+    assert created.failure_code is None
+    assert registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=created.job_id) == created
+    assert registry.get_evaluation_job(tenant_id="tenant-beta", job_id=created.job_id) is None
+    assert registry.count_runs(tenant_id="tenant-alpha") == 0
+
+    import sqlite3
+
+    with sqlite3.connect(registry.path) as connection:
+        idempotency_digest, request_digest = connection.execute(
+            "SELECT idempotency_key_digest, request_digest FROM evaluation_jobs"
+        ).fetchone()
+    assert len(idempotency_digest) == len(request_digest) == 64
+    assert "evaluation-job-test-0001" not in {idempotency_digest, request_digest}
+
+    with pytest.raises(EvaluationJobConflictError, match="idempotency key"):
+        registry.create_evaluation_job(
+            tenant_id="tenant-alpha",
+            suite_id=stored_suite.suite_id,
+            candidate={"policy": "Denied"},
+            idempotency_key="evaluation-job-test-0001",
+        )
+
+
+def test_evaluation_job_binds_digest_to_one_candidate_snapshot(tmp_path: Path) -> None:
+    import hashlib
+    import sqlite3
+
+    from evalforge.provenance import canonical_json_sha256
+    from evalforge.registry import SQLiteRunRegistry
+
+    class StatefulCandidate(dict[str, str]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        def items(self):  # type: ignore[no-untyped-def]
+            self.reads += 1
+            value = "Allowed" if self.reads == 1 else "Denied"
+            return {"policy": value}.items()
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "snapshot.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate=StatefulCandidate(),
+        idempotency_key="evaluation-job-test-0002",
+    )
+
+    with sqlite3.connect(registry.path) as connection:
+        candidate_digest, candidate_json, request_digest = connection.execute(
+            """
+            SELECT candidates.digest, candidates.payload_json, evaluation_jobs.request_digest
+            FROM evaluation_jobs
+            JOIN candidates ON candidates.id = evaluation_jobs.candidate_id
+            """
+        ).fetchone()
+    assert candidate_digest == hashlib.sha256(candidate_json.encode("utf-8")).hexdigest()
+    assert request_digest == canonical_json_sha256(
+        {"suite_id": stored_suite.suite_id, "candidate_sha256": candidate_digest}
+    )
 
 
 def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
@@ -187,6 +287,9 @@ def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
     suite, _candidate, _report = _evaluation_payloads()
     suite_id = canonical_json_sha256(suite)
     with sqlite3.connect(path) as connection:
+        connection.execute("DROP INDEX evaluation_jobs_tenant_page_idx")
+        connection.execute("DROP TABLE evaluation_jobs")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 4")
         connection.execute("DROP INDEX tenant_runs_page_idx")
         connection.execute("DROP TABLE tenant_runs")
         connection.execute("DELETE FROM schema_migrations WHERE version = 3")
@@ -214,11 +317,11 @@ def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
 
     migrated = SQLiteRunRegistry(path)
 
-    assert migrated.diagnostics().schema_version == 3
+    assert migrated.diagnostics().schema_version == 4
     assert migrated.get_suite(tenant_id=TRUSTED_LOCAL_TENANT_ID, suite_id=suite_id) is not None
     assert migrated.get_suite(tenant_id="tenant-alpha", suite_id=suite_id) is None
     assert migrated.count_suites(tenant_id=TRUSTED_LOCAL_TENANT_ID) == 1
-    assert SQLiteRunRegistry(path).diagnostics().schema_version == 3
+    assert SQLiteRunRegistry(path).diagnostics().schema_version == 4
 
 
 def test_v2_registry_migration_assigns_legacy_runs_only_to_trusted_local(
@@ -240,13 +343,16 @@ def test_v2_registry_migration_assigns_legacy_runs_only_to_trusted_local(
         report=report,
     )
     with sqlite3.connect(path) as connection:
+        connection.execute("DROP INDEX evaluation_jobs_tenant_page_idx")
+        connection.execute("DROP TABLE evaluation_jobs")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 4")
         connection.execute("DROP INDEX tenant_runs_page_idx")
         connection.execute("DROP TABLE tenant_runs")
         connection.execute("DELETE FROM schema_migrations WHERE version = 3")
 
     migrated = SQLiteRunRegistry(path)
 
-    assert migrated.diagnostics().schema_version == 3
+    assert migrated.diagnostics().schema_version == 4
     assert (
         migrated.get_run(
             tenant_id=TRUSTED_LOCAL_TENANT_ID,

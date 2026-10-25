@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, and durable asynchronous evaluation submission/status polling. No worker consumes queued jobs yet; retry execution and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -67,7 +67,7 @@ credential value cannot silently downgrade authentication. Failed initialization
 for the process lifetime. Inject this value
 from a deployment secret manager; do not commit it, place it in Compose files, or pass it on a command
 line. Health remains public. Suite, evaluation, run, report, and dashboard routes require a bearer
-token; readers can inspect evidence, while editors and admins can also create suites and evaluations.
+token; readers can inspect evidence and queued job status, while editors and admins can also create suites, synchronous evaluations, and asynchronous evaluation jobs.
 
 Suite membership is scoped to the authenticated principal's tenant. Suite totals and pagination are
 filtered before response construction, and evaluation treats a foreign suite digest exactly like an
@@ -96,6 +96,14 @@ the complete persisted report, and returns the same generic not-found envelope f
 absent runs, and absent cases. It renders one bounded metadata projection and never carries prompt,
 candidate, expected, or normalized metric text into the HTML renderer.
 
+`POST /api/v1/evaluation-jobs` durably records a tenant-visible suite and candidate request without
+executing it inline. It requires a 16–128 character visible-ASCII `Idempotency-Key`, stores only its
+SHA-256 digest, returns the original job for an exact replay, and rejects reuse for different evidence.
+`GET /api/v1/evaluation-jobs/{job_id}` exposes only bounded status metadata. Foreign and absent jobs
+share one not-found envelope. Candidate evidence is stored in the unencrypted SQLite database at
+submission time. This increment provides queue submission and polling only: there is no worker,
+retry loop, lease recovery, or distributed execution yet, so queued jobs remain queued.
+
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
 ## Production boundary
@@ -107,8 +115,9 @@ If an operator chooses to place EvalForge behind a shared network, the surroundi
 - request rate, concurrency, and body-size limits at the edge;
 - egress restrictions for provider access;
 - database and artifact backup, encryption, retention, and access controls;
-- structured log redaction and monitoring; and
-- a deployment-specific recovery and incident response procedure.
+- structured log redaction and monitoring;
+- a deployment-specific recovery and incident response procedure; and
+- a queue worker when asynchronous jobs are enabled, because this repository currently supplies submission and polling but no consumer.
 
 The repository does not claim those controls are built into v0.2.0. SQLite is appropriate for a trusted local process and CI evidence, not a horizontally scaled multi-writer service.
 

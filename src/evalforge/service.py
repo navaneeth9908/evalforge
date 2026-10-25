@@ -25,8 +25,13 @@ from evalforge.provenance import (
     deterministic_run_id,
 )
 from evalforge.registry import (
+    EvaluationJobConflictError as RegistryEvaluationJobConflictError,
+)
+from evalforge.registry import (
+    EvaluationJobSuiteNotFoundError,
     RunSummary,
     SQLiteRunRegistry,
+    StoredEvaluationJob,
     StoredRun,
     StoredSuite,
 )
@@ -60,6 +65,14 @@ class InvalidRunTrendFilterError(ValueError):
 
 class CaseEvidenceNotFoundError(LookupError):
     """The requested run or case evidence is not visible to the tenant."""
+
+
+class EvaluationJobConflictError(ValueError):
+    """An idempotency key is already bound to another evaluation request."""
+
+
+class EvaluationJobNotFoundError(LookupError):
+    """The requested evaluation job is not visible to the tenant."""
 
 
 @dataclass(frozen=True)
@@ -279,6 +292,49 @@ class EvalForgeService:
             candidate=candidate_payload,
             report=report_payload,
         )
+
+    def create_evaluation_job(
+        self,
+        *,
+        tenant_id: str,
+        suite_id: str,
+        candidate_outputs: Mapping[str, str | CandidateOutput],
+        idempotency_key: str,
+    ) -> StoredEvaluationJob:
+        """Persist an idempotent evaluation request without executing it inline."""
+
+        candidate_payload = cast(
+            JsonValue,
+            {
+                case_id: (
+                    output.model_dump(mode="json")
+                    if isinstance(output, CandidateOutput)
+                    else output
+                )
+                for case_id, output in candidate_outputs.items()
+            },
+        )
+        try:
+            return self.registry.create_evaluation_job(
+                tenant_id=tenant_id,
+                suite_id=suite_id,
+                candidate=candidate_payload,
+                idempotency_key=idempotency_key,
+            )
+        except EvaluationJobSuiteNotFoundError as exc:
+            raise SuiteNotFoundError("evaluation suite was not found") from exc
+        except RegistryEvaluationJobConflictError as exc:
+            raise EvaluationJobConflictError(
+                "idempotency key is already bound to another evaluation request"
+            ) from exc
+
+    def get_evaluation_job(self, *, tenant_id: str, job_id: str) -> StoredEvaluationJob:
+        """Return one tenant-visible evaluation job or a non-disclosing failure."""
+
+        stored = self.registry.get_evaluation_job(tenant_id=tenant_id, job_id=job_id)
+        if stored is None:
+            raise EvaluationJobNotFoundError("evaluation job was not found")
+        return stored
 
     def list_runs(
         self,

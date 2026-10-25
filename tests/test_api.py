@@ -30,7 +30,7 @@ def test_health_endpoint_reports_versioned_service_readiness(tmp_path: Path) -> 
     assert response.json() == {
         "api_version": "v1",
         "status": "ok",
-        "storage_schema_version": 3,
+        "storage_schema_version": 4,
     }
 
 

@@ -130,6 +130,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "M5 governed structured-output evaluation | Complete" in acceptance
     assert "M5 dataset mutation and adversarial test-case generation | Complete" in acceptance
     assert "M5 cross-dataset scorecards and long-horizon trends | Complete" in acceptance
+    assert "durable tenant-scoped asynchronous evaluation jobs" in acceptance
 
     for example in (
         "code-harness-evidence.json",

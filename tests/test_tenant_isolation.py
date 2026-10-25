@@ -103,6 +103,95 @@ def test_evaluation_treats_foreign_and_absent_suite_ids_identically(tmp_path: Pa
     assert foreign.json() == absent.json() == expected
 
 
+def test_evaluation_jobs_are_idempotent_tenant_scoped_and_do_not_run_inline(
+    tmp_path: Path,
+) -> None:
+    from evalforge.api import create_app
+    from evalforge.auth import AccessCredential
+
+    alpha_token = "tenant-alpha-editor-token-0000000001"
+    beta_token = "tenant-beta-reader-token-00000000001"
+    app = create_app(
+        tmp_path / "tenant-jobs.db",
+        access_credentials=(
+            AccessCredential(token=alpha_token, tenant_id="tenant-alpha", role="editor"),
+            AccessCredential(token=beta_token, tenant_id="tenant-beta", role="reader"),
+        ),
+    )
+    key_headers = {
+        **_authorization(alpha_token),
+        "Idempotency-Key": "evaluation-job-test-0001",
+    }
+    with TestClient(app) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            headers=_authorization(alpha_token),
+            json=_suite("queued-alpha-suite"),
+        ).json()["suite_id"]
+        payload = {"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}}
+        created = client.post("/api/v1/evaluation-jobs", headers=key_headers, json=payload)
+        replayed = client.post("/api/v1/evaluation-jobs", headers=key_headers, json=payload)
+        conflict = client.post(
+            "/api/v1/evaluation-jobs",
+            headers=key_headers,
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Denied"}},
+        )
+        job_id = created.json().get("job_id", "0" * 64)
+        visible = client.get(
+            f"/api/v1/evaluation-jobs/{job_id}",
+            headers=_authorization(alpha_token),
+        )
+        foreign = client.get(
+            f"/api/v1/evaluation-jobs/{job_id}",
+            headers=_authorization(beta_token),
+        )
+        absent = client.get(
+            f"/api/v1/evaluation-jobs/{'0' * 64}",
+            headers=_authorization(beta_token),
+        )
+        forbidden = client.post(
+            "/api/v1/evaluation-jobs",
+            headers={
+                **_authorization(beta_token),
+                "Idempotency-Key": "evaluation-job-test-0002",
+            },
+            json=payload,
+        )
+        runs = client.get("/api/v1/runs", headers=_authorization(alpha_token))
+
+    assert created.status_code == replayed.status_code == 202
+    assert replayed.json() == created.json()
+    assert created.json() == {
+        "job_id": job_id,
+        "status": "queued",
+        "attempts": 0,
+        "max_attempts": 3,
+        "run_id": None,
+        "failure_code": None,
+        "submitted_at": created.json()["submitted_at"],
+        "updated_at": created.json()["updated_at"],
+    }
+    assert visible.status_code == 200
+    assert visible.json() == created.json()
+    assert conflict.status_code == 409
+    assert conflict.json() == {
+        "error": {
+            "code": "idempotency_conflict",
+            "message": "idempotency key is already bound to another evaluation request",
+        }
+    }
+    expected_missing = {
+        "error": {
+            "code": "evaluation_job_not_found",
+            "message": "evaluation job was not found",
+        }
+    }
+    assert foreign.status_code == absent.status_code == 404
+    assert foreign.json() == absent.json() == expected_missing
+    assert forbidden.status_code == 403
+    assert runs.json()["total"] == 0
+
+
 def test_run_report_and_dashboard_views_are_tenant_scoped(tmp_path: Path) -> None:
     from evalforge.api import create_app
     from evalforge.auth import AccessCredential

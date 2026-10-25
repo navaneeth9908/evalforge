@@ -18,6 +18,7 @@ EvalForge v0.2.0 does **not** provide authentication, authorization, tenant isol
 - Source suites, adversarial mutation plans, and generated prompt datasets
 - Governed cross-dataset score histories, trend policies, and release evidence
 - SQLite registry integrity and availability
+- Tenant-scoped queued evaluation requests, candidate evidence, and idempotency bindings
 - CI check results, JUnit, and SARIF artifacts
 - The host filesystem and network reachable by the EvalForge process
 
@@ -72,7 +73,8 @@ flowchart LR
 | SSRF or provider endpoint abuse | Operator-supplied HTTP(S) origin rejects URL credentials/query/fragment; direct transport does not follow redirects; connect/read/overall deadlines and response bytes are bounded | HTTP remains supported for trusted local endpoints, and DNS/IP egress validation is external in v0.2.0 |
 | SQL injection or registry corruption | Parameterized SQLite statements; typed repository methods; deterministic IDs; transactions and schema checks | The local database is not protected from a user who can modify the file directly |
 | Cross-site scripting or evidence disclosure in the dashboard | HTML escaping, no prompt/candidate/expected/normalized metric text in summary, comparison, trend, or case-detail renderers; 100-row comparison-table caps; 20-point trend cap; bounded mutually exclusive trend selectors; stored-evidence revalidation; restrictive Content Security Policy, `nosniff`, no-store; current `main` can require bearer authentication | Metric, case, and slice identifiers, scores, thresholds, dimensions, resource measurements, run IDs, and recording times remain visible metadata; reverse-proxy headers, origin policy, and TLS are deployment responsibilities |
-| Unauthorized evaluation or report access | Loopback-only Compose default; current `main` offers opt-in bearer authentication, constant-time digest checks, generic failures, reader/editor/admin authorization, immutable tenant memberships, tenant-filtered suite/run/dashboard views, and foreign-resource non-disclosure | Access control is disabled when configuration is absent; static bearer configuration does not provide credential rotation, revocation, federation, quotas, or encrypted storage |
+| Unauthorized evaluation or report access | Loopback-only Compose default; current `main` offers opt-in bearer authentication, constant-time digest checks, generic failures, reader/editor/admin authorization, immutable tenant memberships, tenant-filtered suite/run/dashboard/job views, and foreign-resource non-disclosure | Access control is disabled when configuration is absent; static bearer configuration does not provide credential rotation, revocation, federation, quotas, or encrypted storage |
+| Queued-request replay, enumeration, or premature execution claims | Tenant-scoped job lookup, required bounded idempotency keys stored only as digests, exact request binding, generic foreign/absent failures, and explicit non-inline submission | Candidate evidence is persisted before evaluation; no worker, retry, lease, retention, or distributed-queue controls are implemented yet |
 | False release approval | Fail-closed thresholds, exact evidence cardinality, strict integers, provenance digests, deterministic IDs, tests across gate failures | Deterministic metrics can be incomplete proxies for product quality; human review remains necessary |
 | Forged or incomplete code-test evidence | Approved producer/runtime provenance digest, exact ordered required-case accounting, blocking infrastructure outcomes, content-addressed candidate/evidence IDs | JSON evidence is not a signed execution attestation; producer compromise or weak sandboxing remains external |
 | Forged, biased, or privacy-sensitive retrieval evidence | Approved retriever/corpus/index provenance, exact case accounting, bounded unique IDs, exact-fraction gates, document-ID-free reports | The producer and relevance judgments remain trusted; low-entropy IDs may be guessed from input digests; metrics do not prove corpus completeness or factuality |
@@ -98,7 +100,7 @@ flowchart LR
 - **Sandboxing model output:** EvalForge does not execute model text, but it cannot control downstream consumers.
 - **Candidate-code execution:** not implemented by design. A trusted external harness must isolate untrusted code with network, filesystem, process, CPU, memory, and wall-time controls.
 - **Perfect safety detection:** deterministic patterns and metrics are evidence, not proof of safety or correctness.
-- **High availability:** SQLite and a single process target local and small-team workflows.
+- **High availability:** SQLite and the current API target local and small-team workflows. Asynchronous job submission is durable, but no worker, retry execution, lease recovery, multi-host queue, or autoscaling is implemented.
 - **Artifact signing and SBOM:** planned hardening beyond v0.2.0.
 
 ## Verification and review

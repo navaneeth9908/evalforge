@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Query, Request, Security, status
+from fastapi import Depends, FastAPI, Header, Query, Request, Security, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -27,10 +27,12 @@ from evalforge.contracts import (
     PersistedEvaluationReport,
     Sha256Digest,
 )
-from evalforge.registry import RunSummary, SQLiteRunRegistry, StoredRun
+from evalforge.registry import RunSummary, SQLiteRunRegistry, StoredEvaluationJob, StoredRun
 from evalforge.service import (
     CaseEvidenceNotFoundError,
     EvalForgeService,
+    EvaluationJobConflictError,
+    EvaluationJobNotFoundError,
     IncompatibleRunComparisonError,
     InvalidRunTrendFilterError,
     RunComparisonNotFoundError,
@@ -134,6 +136,21 @@ class EvaluationResponse(BaseModel):
     report: EvaluationReportResponse
 
 
+class EvaluationJobResponse(BaseModel):
+    """Redaction-safe operational state for one asynchronous evaluation request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    job_id: Sha256Digest
+    status: Literal["queued", "running", "succeeded", "failed"]
+    attempts: int = Field(ge=0, le=10)
+    max_attempts: int = Field(ge=1, le=10)
+    run_id: Sha256Digest | None
+    failure_code: str | None
+    submitted_at: str
+    updated_at: str
+
+
 class RunSummaryResponse(BaseModel):
     """Compact content-addressed run history row."""
 
@@ -190,6 +207,19 @@ def _run_response(stored: StoredRun) -> RunResponse:
             "candidate": stored.candidate,
             "report": stored.report,
         }
+    )
+
+
+def _evaluation_job_response(stored: StoredEvaluationJob) -> EvaluationJobResponse:
+    return EvaluationJobResponse(
+        job_id=stored.job_id,
+        status=stored.status,
+        attempts=stored.attempts,
+        max_attempts=stored.max_attempts,
+        run_id=stored.run_id,
+        failure_code=stored.failure_code,
+        submitted_at=stored.submitted_at,
+        updated_at=stored.updated_at,
     )
 
 
@@ -767,6 +797,68 @@ def create_app(
             offset=offset,
             total=service.count_suites(tenant_id=principal.tenant_id),
         )
+
+    @app.post(
+        "/api/v1/evaluation-jobs",
+        response_model=EvaluationJobResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        tags=["evaluation-jobs"],
+    )
+    def create_evaluation_job(
+        request: EvaluationRequest,
+        idempotency_key: Annotated[
+            str,
+            Header(
+                alias="Idempotency-Key",
+                min_length=16,
+                max_length=128,
+                pattern=r"^[!-~]+$",
+            ),
+        ],
+        principal: AuthenticatedPrincipal = write_dependency,
+    ) -> EvaluationJobResponse:
+        try:
+            stored = service.create_evaluation_job(
+                tenant_id=principal.tenant_id,
+                suite_id=request.suite_id,
+                candidate_outputs=request.candidate_outputs,
+                idempotency_key=idempotency_key,
+            )
+        except SuiteNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="suite_not_found",
+                message="evaluation suite was not found",
+            ) from exc
+        except EvaluationJobConflictError as exc:
+            raise APIError(
+                status_code=409,
+                code="idempotency_conflict",
+                message="idempotency key is already bound to another evaluation request",
+            ) from exc
+        return _evaluation_job_response(stored)
+
+    @app.get(
+        "/api/v1/evaluation-jobs/{job_id}",
+        response_model=EvaluationJobResponse,
+        tags=["evaluation-jobs"],
+    )
+    def get_evaluation_job(
+        job_id: Sha256Digest,
+        principal: AuthenticatedPrincipal = read_dependency,
+    ) -> EvaluationJobResponse:
+        try:
+            stored = service.get_evaluation_job(
+                tenant_id=principal.tenant_id,
+                job_id=job_id,
+            )
+        except EvaluationJobNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="evaluation_job_not_found",
+                message="evaluation job was not found",
+            ) from exc
+        return _evaluation_job_response(stored)
 
     @app.post(
         "/api/v1/evaluations",

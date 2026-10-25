@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from evalforge.auth import TRUSTED_LOCAL_TENANT_ID
 from evalforge.provenance import (
@@ -205,6 +207,38 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        4,
+        (
+            """
+            CREATE TABLE evaluation_jobs (
+                job_id TEXT PRIMARY KEY CHECK(length(job_id) = 64),
+                tenant_id TEXT NOT NULL,
+                idempotency_key_digest TEXT NOT NULL CHECK(length(idempotency_key_digest) = 64),
+                request_digest TEXT NOT NULL CHECK(length(request_digest) = 64),
+                suite_id INTEGER NOT NULL REFERENCES suites(id),
+                candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+                status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'failed')),
+                attempts INTEGER NOT NULL CHECK(attempts >= 0 AND attempts <= max_attempts),
+                max_attempts INTEGER NOT NULL CHECK(max_attempts BETWEEN 1 AND 10),
+                run_id TEXT REFERENCES runs(run_id),
+                failure_code TEXT,
+                submitted_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (tenant_id, idempotency_key_digest),
+                CHECK (
+                    (status = 'succeeded' AND run_id IS NOT NULL AND failure_code IS NULL)
+                    OR (status = 'failed' AND run_id IS NULL AND failure_code IS NOT NULL)
+                    OR (status IN ('queued', 'running') AND run_id IS NULL AND failure_code IS NULL)
+                )
+            )
+            """,
+            """
+            CREATE INDEX evaluation_jobs_tenant_page_idx
+            ON evaluation_jobs(tenant_id, submitted_at DESC, job_id)
+            """,
+        ),
+    ),
 )
 
 
@@ -272,6 +306,28 @@ class StoredRun:
             release_ready=self.release_ready,
             created_at=self.created_at,
         )
+
+
+class EvaluationJobConflictError(ValueError):
+    """An idempotency key is already bound to another evaluation request."""
+
+
+class EvaluationJobSuiteNotFoundError(LookupError):
+    """A queued evaluation references no suite visible to the tenant."""
+
+
+@dataclass(frozen=True)
+class StoredEvaluationJob:
+    """Tenant-scoped operational state for one durable evaluation request."""
+
+    job_id: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    attempts: int
+    max_attempts: int
+    run_id: str | None
+    failure_code: str | None
+    submitted_at: str
+    updated_at: str
 
 
 class SQLiteRunRegistry:
@@ -478,6 +534,125 @@ class SQLiteRunRegistry:
         if stored is None:
             raise RuntimeError("stored run could not be read back")
         return stored
+
+    def create_evaluation_job(
+        self,
+        *,
+        tenant_id: str,
+        suite_id: str,
+        candidate: JsonValue,
+        idempotency_key: str,
+    ) -> StoredEvaluationJob:
+        """Durably enqueue one idempotent tenant-scoped evaluation request."""
+
+        _validate_tenant_id(tenant_id)
+        _require_digest(suite_id, label="suite digest")
+        _validate_idempotency_key(idempotency_key)
+        candidate_object = _require_object(candidate, label="candidate")
+        candidate_bytes = canonical_json_bytes(candidate_object)
+        candidate_json = candidate_bytes.decode("utf-8")
+        candidate_sha256 = sha256(candidate_bytes).hexdigest()
+        request_digest = canonical_json_sha256(
+            {"suite_id": suite_id, "candidate_sha256": candidate_sha256}
+        )
+        idempotency_key_digest = sha256(idempotency_key.encode("ascii")).hexdigest()
+        submitted_at = _utc_now()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            suite_row = connection.execute(
+                """
+                SELECT suites.id
+                FROM tenant_suites
+                JOIN suites ON suites.id = tenant_suites.suite_id
+                WHERE tenant_suites.tenant_id = ? AND suites.digest = ?
+                """,
+                (tenant_id, suite_id),
+            ).fetchone()
+            if suite_row is None:
+                raise EvaluationJobSuiteNotFoundError("evaluation suite was not found")
+            existing = connection.execute(
+                _EVALUATION_JOB_SELECT
+                + " WHERE evaluation_jobs.tenant_id = ?"
+                + " AND evaluation_jobs.idempotency_key_digest = ?",
+                (tenant_id, idempotency_key_digest),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_digest"] != request_digest:
+                    raise EvaluationJobConflictError(
+                        "idempotency key is already bound to another evaluation request"
+                    )
+                connection.commit()
+                return _stored_evaluation_job(existing)
+            candidate_id = _insert_evidence(
+                connection,
+                table="candidates",
+                digest=candidate_sha256,
+                payload_json=candidate_json,
+                created_at=submitted_at,
+            )
+            job_id = secrets.token_hex(32)
+            while (
+                connection.execute(
+                    "SELECT 1 FROM evaluation_jobs WHERE job_id = ?", (job_id,)
+                ).fetchone()
+                is not None
+            ):
+                job_id = secrets.token_hex(32)
+            connection.execute(
+                """
+                INSERT INTO evaluation_jobs(
+                    job_id, tenant_id, idempotency_key_digest, request_digest,
+                    suite_id, candidate_id, status, attempts, max_attempts,
+                    run_id, failure_code, submitted_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, 3, NULL, NULL, ?, ?)
+                """,
+                (
+                    job_id,
+                    tenant_id,
+                    idempotency_key_digest,
+                    request_digest,
+                    int(suite_row["id"]),
+                    candidate_id,
+                    submitted_at,
+                    submitted_at,
+                ),
+            )
+            row = connection.execute(
+                _EVALUATION_JOB_SELECT + " WHERE evaluation_jobs.job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("stored evaluation job could not be validated")
+            connection.commit()
+            return _stored_evaluation_job(row)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def get_evaluation_job(
+        self,
+        *,
+        tenant_id: str,
+        job_id: str,
+    ) -> StoredEvaluationJob | None:
+        """Read one evaluation job only through its tenant membership."""
+
+        _validate_tenant_id(tenant_id)
+        _require_digest(job_id, label="evaluation job ID")
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                _EVALUATION_JOB_SELECT
+                + " WHERE evaluation_jobs.tenant_id = ? AND evaluation_jobs.job_id = ?",
+                (tenant_id, job_id),
+            ).fetchone()
+        finally:
+            connection.close()
+        return None if row is None else _stored_evaluation_job(row)
 
     def create_suite(self, *, tenant_id: str, name: str, suite: JsonValue) -> StoredSuite:
         """Persist a suite idempotently by its canonical content digest."""
@@ -720,6 +895,20 @@ JOIN candidates ON candidates.id = runs.candidate_id
 JOIN reports ON reports.run_id = runs.run_id
 """
 
+_EVALUATION_JOB_SELECT = """
+SELECT
+    evaluation_jobs.job_id,
+    evaluation_jobs.request_digest,
+    evaluation_jobs.status,
+    evaluation_jobs.attempts,
+    evaluation_jobs.max_attempts,
+    evaluation_jobs.run_id,
+    evaluation_jobs.failure_code,
+    evaluation_jobs.submitted_at,
+    evaluation_jobs.updated_at
+FROM evaluation_jobs
+"""
+
 
 def _insert_evidence(
     connection: sqlite3.Connection,
@@ -837,6 +1026,22 @@ def _stored_run(row: sqlite3.Row) -> StoredRun:
     )
 
 
+def _stored_evaluation_job(row: sqlite3.Row) -> StoredEvaluationJob:
+    status = str(row["status"])
+    if status not in {"queued", "running", "succeeded", "failed"}:
+        raise RuntimeError("stored evaluation job has an invalid status")
+    return StoredEvaluationJob(
+        job_id=str(row["job_id"]),
+        status=cast(Literal["queued", "running", "succeeded", "failed"], status),
+        attempts=int(row["attempts"]),
+        max_attempts=int(row["max_attempts"]),
+        run_id=None if row["run_id"] is None else str(row["run_id"]),
+        failure_code=None if row["failure_code"] is None else str(row["failure_code"]),
+        submitted_at=str(row["submitted_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
 def _require_object(value: JsonValue, *, label: str) -> dict[str, JsonValue]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
@@ -872,6 +1077,15 @@ def _validate_tenant_id(tenant_id: str) -> None:
         or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in tenant_id)
     ):
         raise ValueError("tenant ID is invalid")
+
+
+def _validate_idempotency_key(idempotency_key: str) -> None:
+    if (
+        type(idempotency_key) is not str
+        or not 16 <= len(idempotency_key) <= 128
+        or any(not "!" <= character <= "~" for character in idempotency_key)
+    ):
+        raise ValueError("idempotency key is invalid")
 
 
 def _utc_now() -> str:
