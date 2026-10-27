@@ -145,7 +145,7 @@ def test_registry_applies_migrations_and_safe_connection_defaults(tmp_path: Path
     registry = SQLiteRunRegistry(tmp_path / "history.db")
 
     diagnostics = registry.diagnostics()
-    assert diagnostics.schema_version == 4
+    assert diagnostics.schema_version == 5
     assert diagnostics.foreign_keys is True
     assert diagnostics.journal_mode == "wal"
     assert diagnostics.busy_timeout_ms == 5_000
@@ -273,6 +273,319 @@ def test_evaluation_job_binds_digest_to_one_candidate_snapshot(tmp_path: Path) -
     )
 
 
+def test_evaluation_job_claim_is_atomic_and_keeps_lease_token_out_of_storage(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    import sqlite3
+
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    path = tmp_path / "leases.db"
+    submitter = SQLiteRunRegistry(path)
+    stored_suite = submitter.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = submitter.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-lease-0001",
+    )
+    competing_worker = SQLiteRunRegistry(path)
+
+    claimed = submitter.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    unavailable = competing_worker.claim_evaluation_job(worker_id="worker-b", lease_seconds=30)
+
+    assert claimed is not None
+    assert claimed.job_id == queued.job_id
+    assert claimed.tenant_id == "tenant-alpha"
+    assert claimed.suite_id == stored_suite.suite_id
+    assert claimed.suite == suite
+    assert claimed.candidate == {"policy": "Allowed"}
+    assert claimed.attempts == 1
+    assert claimed.max_attempts == 3
+    assert unavailable is None
+    assert (
+        submitter.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id).status
+        == "running"
+    )
+
+    with sqlite3.connect(path) as connection:
+        worker_id, token_digest, lease_expires_at = connection.execute(
+            """
+            SELECT worker_id, lease_token_digest, lease_expires_at
+            FROM evaluation_jobs WHERE job_id = ?
+            """,
+            (queued.job_id,),
+        ).fetchone()
+    assert worker_id == "worker-a"
+    assert token_digest == hashlib.sha256(claimed.lease_token.encode("ascii")).hexdigest()
+    assert claimed.lease_token != token_digest
+    assert len(token_digest) == 64
+    assert lease_expires_at == claimed.lease_expires_at
+
+
+def test_evaluation_job_lease_starts_after_write_lock_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from evalforge import registry as registry_module
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    path = tmp_path / "contended-lease.db"
+    registry = SQLiteRunRegistry(path)
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-contended-lease-0001",
+    )
+    lock_held = threading.Event()
+    monkeypatch.setattr(
+        registry_module,
+        "_utc_now",
+        lambda: (
+            "2026-01-01T00:00:00.000000Z" if lock_held.is_set() else "2026-01-01T00:00:02.000000Z"
+        ),
+    )
+
+    with sqlite3.connect(path) as blocker, ThreadPoolExecutor(max_workers=1) as executor:
+        blocker.execute("BEGIN IMMEDIATE")
+        lock_held.set()
+        future = executor.submit(
+            registry.claim_evaluation_job,
+            worker_id="worker-a",
+            lease_seconds=1,
+        )
+        time.sleep(0.1)
+        blocker.rollback()
+        lock_held.clear()
+        claimed = future.result(timeout=2)
+
+    assert claimed is not None
+    assert claimed.lease_expires_at == "2026-01-01T00:00:03.000000Z"
+    assert registry.claim_evaluation_job(worker_id="worker-b", lease_seconds=1) is None
+
+
+def test_exhausted_queued_job_does_not_poison_later_work(tmp_path: Path) -> None:
+    import sqlite3
+
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "exhausted-queued.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    exhausted = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "first"},
+        idempotency_key="evaluation-job-exhausted-queued-0001",
+    )
+    available = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "second"},
+        idempotency_key="evaluation-job-exhausted-queued-0002",
+    )
+    with sqlite3.connect(registry.path) as connection:
+        connection.execute(
+            "UPDATE evaluation_jobs SET attempts = max_attempts WHERE job_id = ?",
+            (exhausted.job_id,),
+        )
+
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+
+    assert claimed is not None
+    assert claimed.job_id == available.job_id
+    terminal = registry.get_evaluation_job(
+        tenant_id="tenant-alpha",
+        job_id=exhausted.job_id,
+    )
+    assert terminal is not None
+    assert terminal.status == "failed"
+    assert terminal.failure_code == "attempt_limit_exhausted"
+
+
+def test_expired_evaluation_job_leases_retry_only_to_the_attempt_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge import registry as registry_module
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "retry-leases.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-lease-0002",
+    )
+    timestamps = iter(
+        (
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-01T00:00:02.000000Z",
+            "2026-01-01T00:00:04.000000Z",
+            "2026-01-01T00:00:06.000000Z",
+        )
+    )
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: next(timestamps))
+
+    first = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=1)
+    second = registry.claim_evaluation_job(worker_id="worker-b", lease_seconds=1)
+    third = registry.claim_evaluation_job(worker_id="worker-c", lease_seconds=1)
+    exhausted = registry.claim_evaluation_job(worker_id="worker-d", lease_seconds=1)
+
+    assert first is not None and first.attempts == 1
+    assert second is not None and second.attempts == 2
+    assert third is not None and third.attempts == 3
+    assert len({first.lease_token, second.lease_token, third.lease_token}) == 3
+    assert exhausted is None
+    terminal = registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id)
+    assert terminal is not None
+    assert terminal.status == "failed"
+    assert terminal.attempts == terminal.max_attempts == 3
+    assert terminal.failure_code == "attempt_limit_exhausted"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "UPDATE evaluation_jobs SET status = 'running'",
+        """
+        UPDATE evaluation_jobs
+        SET status = 'running', attempts = 1, worker_id = 'Worker-A',
+            lease_token_digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            lease_expires_at = '2026-01-01T00:00:01.000000Z'
+        """,
+        """
+        UPDATE evaluation_jobs
+        SET status = 'running', attempts = 1, worker_id = 'worker-a',
+            lease_token_digest = 'gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg',
+            lease_expires_at = '2026-01-01T00:00:01.000000Z'
+        """,
+        """
+        UPDATE evaluation_jobs
+        SET status = 'running', attempts = 0, worker_id = 'worker-a',
+            lease_token_digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            lease_expires_at = 'not-a-canonical-timestamp'
+        """,
+        """
+        UPDATE evaluation_jobs
+        SET status = 'running', attempts = 1, worker_id = NULL,
+            lease_token_digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            lease_expires_at = '2026-01-01T00:00:01.000000Z'
+        """,
+        """
+        UPDATE evaluation_jobs
+        SET status = 'running', attempts = 1, worker_id = 'worker-a',
+            lease_token_digest = NULL,
+            lease_expires_at = '2026-01-01T00:00:01.000000Z'
+        """,
+        """
+        UPDATE evaluation_jobs
+        SET status = 'running', attempts = 1, worker_id = 'worker-a',
+            lease_token_digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            lease_expires_at = '2026-02-30T00:00:01.000000Z'
+        """,
+    ),
+)
+def test_evaluation_job_lease_state_rejects_invalid_database_mutation(
+    tmp_path: Path, statement: str
+) -> None:
+    import sqlite3
+
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "lease-state.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-lease-0003",
+    )
+
+    with (
+        sqlite3.connect(registry.path) as connection,
+        pytest.raises(sqlite3.IntegrityError, match="lease state is invalid"),
+    ):
+        connection.execute(statement)
+
+
+def test_v4_running_evaluation_job_migration_fails_closed(tmp_path: Path) -> None:
+    import sqlite3
+
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    path = tmp_path / "legacy-running-job.db"
+    registry = SQLiteRunRegistry(path)
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-lease-0004",
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TRIGGER evaluation_jobs_lease_state_insert")
+        connection.execute("DROP TRIGGER evaluation_jobs_lease_state_update")
+        connection.execute("ALTER TABLE evaluation_jobs DROP COLUMN worker_id")
+        connection.execute("ALTER TABLE evaluation_jobs DROP COLUMN lease_token_digest")
+        connection.execute("ALTER TABLE evaluation_jobs DROP COLUMN lease_expires_at")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+        connection.execute(
+            """
+            UPDATE evaluation_jobs
+            SET status = 'running', attempts = 1, updated_at = '2026-01-01T00:00:00.000000Z'
+            WHERE job_id = ?
+            """,
+            (queued.job_id,),
+        )
+
+    migrated = SQLiteRunRegistry(path)
+    terminal = migrated.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id)
+
+    assert migrated.diagnostics().schema_version == 5
+    assert terminal is not None
+    assert terminal.status == "failed"
+    assert terminal.attempts == 1
+    assert terminal.failure_code == "legacy_running_state"
+    assert migrated.claim_evaluation_job(worker_id="worker-a", lease_seconds=30) is None
+
+
 def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
     tmp_path: Path,
 ) -> None:
@@ -287,6 +600,7 @@ def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
     suite, _candidate, _report = _evaluation_payloads()
     suite_id = canonical_json_sha256(suite)
     with sqlite3.connect(path) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 5")
         connection.execute("DROP INDEX evaluation_jobs_tenant_page_idx")
         connection.execute("DROP TABLE evaluation_jobs")
         connection.execute("DELETE FROM schema_migrations WHERE version = 4")
@@ -317,11 +631,11 @@ def test_v1_registry_migration_assigns_legacy_suites_only_to_trusted_local(
 
     migrated = SQLiteRunRegistry(path)
 
-    assert migrated.diagnostics().schema_version == 4
+    assert migrated.diagnostics().schema_version == 5
     assert migrated.get_suite(tenant_id=TRUSTED_LOCAL_TENANT_ID, suite_id=suite_id) is not None
     assert migrated.get_suite(tenant_id="tenant-alpha", suite_id=suite_id) is None
     assert migrated.count_suites(tenant_id=TRUSTED_LOCAL_TENANT_ID) == 1
-    assert SQLiteRunRegistry(path).diagnostics().schema_version == 4
+    assert SQLiteRunRegistry(path).diagnostics().schema_version == 5
 
 
 def test_v2_registry_migration_assigns_legacy_runs_only_to_trusted_local(
@@ -343,6 +657,7 @@ def test_v2_registry_migration_assigns_legacy_runs_only_to_trusted_local(
         report=report,
     )
     with sqlite3.connect(path) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 5")
         connection.execute("DROP INDEX evaluation_jobs_tenant_page_idx")
         connection.execute("DROP TABLE evaluation_jobs")
         connection.execute("DELETE FROM schema_migrations WHERE version = 4")
@@ -352,7 +667,7 @@ def test_v2_registry_migration_assigns_legacy_runs_only_to_trusted_local(
 
     migrated = SQLiteRunRegistry(path)
 
-    assert migrated.diagnostics().schema_version == 4
+    assert migrated.diagnostics().schema_version == 5
     assert (
         migrated.get_run(
             tenant_id=TRUSTED_LOCAL_TENANT_ID,

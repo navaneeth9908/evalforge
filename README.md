@@ -79,6 +79,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Tenant-scoped filtered metric, category, and tag trends with fail-closed dimension selection
 - Tenant-scoped case evidence detail with score, threshold, dimensions, and optional resource evidence but no private text
 - Durable tenant-scoped asynchronous evaluation submission with idempotent queue records and status polling
+- Atomic oldest-first worker leases with token-digest storage, bounded expiry recovery, and terminal attempt exhaustion
 - Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
 - Non-root container image, loopback-only Compose deployment, and bounded health smoke
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
@@ -86,7 +87,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, and durable asynchronous evaluation submission/status polling. Worker claims, retry execution, and multi-host distribution remain roadmap work.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, and atomic expiring worker leases. Worker execution/completion, lease renewal, retry classification, and multi-host deployment remain roadmap work.
 
 ## Quick start
 
@@ -194,8 +195,10 @@ The versioned `/api/v1` surface provides health, suite creation/listing, synchro
 durable `POST /api/v1/evaluation-jobs` submission, tenant-scoped job polling, run history, and
 immutable report retrieval. Job submission requires a 16–128 character visible-ASCII
 `Idempotency-Key`; replaying the same key and canonical request returns the original queued job,
-while reusing it for different evidence returns `409`. Submission does not execute a run inline,
-and this slice does not yet include a worker. Pagination and request sizes are bounded. Validation,
+while reusing it for different evidence returns `409`. Submission does not execute a run inline.
+The registry can atomically claim the oldest available job with a bounded lease, keep only a digest
+of the capability token at rest, reclaim expired work, and stop after three claims. This slice does
+not yet execute or complete claimed work. Pagination and request sizes are bounded. Validation,
 missing-resource, and unexpected errors use redaction-safe envelopes that do not echo submitted
 prompts, candidate outputs, database details, or exception traces. `/dashboard` provides a
 read-only local run table with report links and same-suite comparison links. The

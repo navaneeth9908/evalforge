@@ -6,7 +6,7 @@ import json
 import secrets
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal, cast
@@ -239,6 +239,81 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        5,
+        (
+            """
+            UPDATE evaluation_jobs
+            SET status = 'failed', failure_code = 'legacy_running_state'
+            WHERE status = 'running'
+            """,
+            "ALTER TABLE evaluation_jobs ADD COLUMN worker_id TEXT",
+            "ALTER TABLE evaluation_jobs ADD COLUMN lease_token_digest TEXT",
+            "ALTER TABLE evaluation_jobs ADD COLUMN lease_expires_at TEXT",
+            """
+            CREATE TRIGGER evaluation_jobs_lease_state_insert
+            BEFORE INSERT ON evaluation_jobs
+            WHEN NOT (
+                (NEW.status = 'running'
+                 AND NEW.attempts BETWEEN 1 AND NEW.max_attempts
+                 AND NEW.worker_id IS NOT NULL
+                 AND length(NEW.worker_id) BETWEEN 1 AND 64
+                 AND substr(NEW.worker_id, 1, 1) GLOB '[a-z0-9]'
+                 AND substr(NEW.worker_id, -1, 1) GLOB '[a-z0-9]'
+                 AND NEW.worker_id NOT GLOB '*[^a-z0-9-]*'
+                 AND NEW.lease_token_digest IS NOT NULL
+                 AND length(NEW.lease_token_digest) = 64
+                 AND NEW.lease_token_digest NOT GLOB '*[^0-9a-f]*'
+                 AND NEW.lease_expires_at IS NOT NULL
+                 AND length(NEW.lease_expires_at) = 27
+                 AND NEW.lease_expires_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+                 AND julianday(substr(NEW.lease_expires_at, 1, 19) || 'Z') IS NOT NULL
+                 AND strftime(
+                     '%Y-%m-%dT%H:%M:%S',
+                     julianday(substr(NEW.lease_expires_at, 1, 19) || 'Z')
+                 ) = substr(NEW.lease_expires_at, 1, 19))
+                OR
+                (NEW.status != 'running'
+                 AND NEW.worker_id IS NULL
+                 AND NEW.lease_token_digest IS NULL
+                 AND NEW.lease_expires_at IS NULL)
+            )
+            BEGIN SELECT RAISE(ABORT, 'evaluation job lease state is invalid'); END
+            """,
+            """
+            CREATE TRIGGER evaluation_jobs_lease_state_update
+            BEFORE UPDATE ON evaluation_jobs
+            WHEN NOT (
+                (NEW.status = 'running'
+                 AND NEW.attempts BETWEEN 1 AND NEW.max_attempts
+                 AND NEW.worker_id IS NOT NULL
+                 AND length(NEW.worker_id) BETWEEN 1 AND 64
+                 AND substr(NEW.worker_id, 1, 1) GLOB '[a-z0-9]'
+                 AND substr(NEW.worker_id, -1, 1) GLOB '[a-z0-9]'
+                 AND NEW.worker_id NOT GLOB '*[^a-z0-9-]*'
+                 AND NEW.lease_token_digest IS NOT NULL
+                 AND length(NEW.lease_token_digest) = 64
+                 AND NEW.lease_token_digest NOT GLOB '*[^0-9a-f]*'
+                 AND NEW.lease_expires_at IS NOT NULL
+                 AND length(NEW.lease_expires_at) = 27
+                 AND NEW.lease_expires_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+                 AND julianday(substr(NEW.lease_expires_at, 1, 19) || 'Z') IS NOT NULL
+                 AND strftime(
+                     '%Y-%m-%dT%H:%M:%S',
+                     julianday(substr(NEW.lease_expires_at, 1, 19) || 'Z')
+                 ) = substr(NEW.lease_expires_at, 1, 19))
+                OR
+                (NEW.status != 'running'
+                 AND NEW.worker_id IS NULL
+                 AND NEW.lease_token_digest IS NULL
+                 AND NEW.lease_expires_at IS NULL)
+            )
+            BEGIN SELECT RAISE(ABORT, 'evaluation job lease state is invalid'); END
+            """,
+        ),
+    ),
 )
 
 
@@ -328,6 +403,21 @@ class StoredEvaluationJob:
     failure_code: str | None
     submitted_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class ClaimedEvaluationJob:
+    """One atomically leased work item with its private execution evidence."""
+
+    job_id: str
+    tenant_id: str
+    suite_id: str
+    suite: JsonValue
+    candidate: JsonValue
+    attempts: int
+    max_attempts: int
+    lease_token: str
+    lease_expires_at: str
 
 
 class SQLiteRunRegistry:
@@ -653,6 +743,102 @@ class SQLiteRunRegistry:
         finally:
             connection.close()
         return None if row is None else _stored_evaluation_job(row)
+
+    def claim_evaluation_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> ClaimedEvaluationJob | None:
+        """Atomically lease the oldest available job for one bounded attempt."""
+
+        _validate_worker_id(worker_id)
+        if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3_600:
+            raise ValueError("lease duration must be an integer from 1 through 3600 seconds")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = _utc_now()
+            lease_expires_at = _lease_expiry(now, lease_seconds)
+            connection.execute(
+                """
+                UPDATE evaluation_jobs
+                SET status = 'failed', failure_code = 'attempt_limit_exhausted',
+                    worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE attempts >= max_attempts
+                  AND (
+                      status = 'queued'
+                      OR (status = 'running' AND lease_expires_at <= ?)
+                  )
+                """,
+                (now, now),
+            )
+            row = connection.execute(
+                """
+                SELECT evaluation_jobs.job_id, evaluation_jobs.tenant_id,
+                       evaluation_jobs.attempts, evaluation_jobs.max_attempts,
+                       suites.digest AS suite_digest, suites.payload_json AS suite_json,
+                       candidates.payload_json AS candidate_json
+                FROM evaluation_jobs
+                JOIN suites ON suites.id = evaluation_jobs.suite_id
+                JOIN candidates ON candidates.id = evaluation_jobs.candidate_id
+                WHERE (
+                       evaluation_jobs.status = 'queued'
+                       AND evaluation_jobs.attempts < evaluation_jobs.max_attempts
+                   )
+                   OR (
+                       evaluation_jobs.status = 'running'
+                       AND evaluation_jobs.lease_expires_at <= ?
+                       AND evaluation_jobs.attempts < evaluation_jobs.max_attempts
+                   )
+                ORDER BY evaluation_jobs.submitted_at, evaluation_jobs.job_id
+                LIMIT 1
+                """,
+                (now,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            lease_token = secrets.token_urlsafe(32)
+            lease_token_digest = sha256(lease_token.encode("ascii")).hexdigest()
+            attempts = int(row["attempts"]) + 1
+            updated = connection.execute(
+                """
+                UPDATE evaluation_jobs
+                SET status = 'running', attempts = ?, failure_code = NULL,
+                    worker_id = ?, lease_token_digest = ?, lease_expires_at = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (
+                    attempts,
+                    worker_id,
+                    lease_token_digest,
+                    lease_expires_at,
+                    now,
+                    str(row["job_id"]),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("evaluation job lease could not be persisted")
+            connection.commit()
+            return ClaimedEvaluationJob(
+                job_id=str(row["job_id"]),
+                tenant_id=str(row["tenant_id"]),
+                suite_id=str(row["suite_digest"]),
+                suite=cast(JsonValue, json.loads(str(row["suite_json"]))),
+                candidate=cast(JsonValue, json.loads(str(row["candidate_json"]))),
+                attempts=attempts,
+                max_attempts=int(row["max_attempts"]),
+                lease_token=lease_token,
+                lease_expires_at=lease_expires_at,
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def create_suite(self, *, tenant_id: str, name: str, suite: JsonValue) -> StoredSuite:
         """Persist a suite idempotently by its canonical content digest."""
@@ -1086,6 +1272,26 @@ def _validate_idempotency_key(idempotency_key: str) -> None:
         or any(not "!" <= character <= "~" for character in idempotency_key)
     ):
         raise ValueError("idempotency key is invalid")
+
+
+def _validate_worker_id(worker_id: str) -> None:
+    if (
+        type(worker_id) is not str
+        or not 1 <= len(worker_id) <= 64
+        or not worker_id[0].isalnum()
+        or not worker_id[-1].isalnum()
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in worker_id)
+    ):
+        raise ValueError("worker ID is invalid")
+
+
+def _lease_expiry(now: str, lease_seconds: int) -> str:
+    parsed = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    return (
+        (parsed + timedelta(seconds=lease_seconds))
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _utc_now() -> str:

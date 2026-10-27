@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, and durable asynchronous evaluation submission/status polling. No worker consumes queued jobs yet; retry execution and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, and atomic expiring worker claims. No worker executes or completes claimed jobs yet; lease renewal, retry classification, and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -101,8 +101,11 @@ executing it inline. It requires a 16–128 character visible-ASCII `Idempotency
 SHA-256 digest, returns the original job for an exact replay, and rejects reuse for different evidence.
 `GET /api/v1/evaluation-jobs/{job_id}` exposes only bounded status metadata. Foreign and absent jobs
 share one not-found envelope. Candidate evidence is stored in the unencrypted SQLite database at
-submission time. This increment provides queue submission and polling only: there is no worker,
-retry loop, lease recovery, or distributed execution yet, so queued jobs remain queued.
+submission time. A registry worker consumer can atomically claim the oldest queued or expired job
+for 1–3,600 seconds. Claims return a fresh private capability token while persisting only its digest;
+active leases exclude competing claimers, and expiry recovery stops after the third claim with
+`attempt_limit_exhausted`. There is no execution/completion path, lease renewal, retry
+classification, worker process, or multi-host queue yet.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
@@ -117,9 +120,9 @@ If an operator chooses to place EvalForge behind a shared network, the surroundi
 - database and artifact backup, encryption, retention, and access controls;
 - structured log redaction and monitoring;
 - a deployment-specific recovery and incident response procedure; and
-- a queue worker when asynchronous jobs are enabled, because this repository currently supplies submission and polling but no consumer.
+- a queue worker when asynchronous jobs are enabled, because this repository currently supplies submission, polling, and lease claims but no execution/completion consumer.
 
-The repository does not claim those controls are built into v0.2.0. SQLite is appropriate for a trusted local process and CI evidence, not a horizontally scaled multi-writer service.
+The repository does not claim those controls are built into v0.2.0. SQLite serializes local lease claims but is appropriate for a trusted local process and CI evidence, not a horizontally scaled multi-host worker service.
 
 ## Verification
 

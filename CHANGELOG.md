@@ -14,10 +14,11 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Filtered metric, category, and tag trends with weighted score projections, bounded selectors, and fail-closed unknown or ambiguous filter handling.
 - Tenant-scoped dedicated case evidence with threshold provenance, dimensions, optional resource measurements, and private-text omission.
 - Durable tenant-scoped asynchronous evaluation submission with hashed idempotency keys, queued status polling, and no inline run creation.
+- Atomic oldest-first worker claims with expiring leases, capability-token digest storage, expiry recovery, and terminal three-attempt exhaustion.
 
 ### Security
 
-- Protected suite, evaluation, asynchronous-job, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Pairwise comparisons, filtered trends, and case detail require tenant-visible anchors, revalidate stored evidence, render bounded redacted projections, reject ambiguous trend filters, and treat foreign run or job identifiers like absent identifiers. Job idempotency keys are stored only as SHA-256 digests. Legacy suites and runs migrate only to trusted-local ownership.
+- Protected suite, evaluation, asynchronous-job, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Pairwise comparisons, filtered trends, and case detail require tenant-visible anchors, revalidate stored evidence, render bounded redacted projections, reject ambiguous trend filters, and treat foreign run or job identifiers like absent identifiers. Job idempotency keys and worker capability tokens are stored only as SHA-256 digests; lease-state triggers reject partial running states. Legacy suites and runs migrate only to trusted-local ownership.
 
 ## [0.2.0] - 2026-10-08
 

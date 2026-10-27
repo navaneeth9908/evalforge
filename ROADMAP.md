@@ -84,7 +84,8 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
     - [x] Dedicated redacted case-level evidence detail
 - [ ] Hosted API workers, queues, retries, and distributed execution
   - [x] Durable tenant-scoped asynchronous evaluation submission, idempotency, and status polling
-  - [ ] Leased workers, bounded retries, and multi-host distributed execution
+  - [x] Atomic worker claims, expiring leases, and bounded attempt exhaustion
+  - [ ] Worker execution/completion, lease renewal, retry classification, and multi-host distribution
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics
 - [ ] Signed release artifacts, SBOM publication, and provenance attestations
