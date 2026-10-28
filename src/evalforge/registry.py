@@ -391,6 +391,10 @@ class EvaluationJobSuiteNotFoundError(LookupError):
     """A queued evaluation references no suite visible to the tenant."""
 
 
+class EvaluationJobLeaseNotFoundError(LookupError):
+    """A worker capability does not identify one active evaluation-job lease."""
+
+
 @dataclass(frozen=True)
 class StoredEvaluationJob:
     """Tenant-scoped operational state for one durable evaluation request."""
@@ -416,6 +420,16 @@ class ClaimedEvaluationJob:
     candidate: JsonValue
     attempts: int
     max_attempts: int
+    lease_token: str
+    lease_expires_at: str
+
+
+@dataclass(frozen=True)
+class RenewedEvaluationJobLease:
+    """A capability-authorized extension of one active worker lease."""
+
+    job_id: str
+    attempts: int
     lease_token: str
     lease_expires_at: str
 
@@ -832,6 +846,72 @@ class SQLiteRunRegistry:
                 attempts=attempts,
                 max_attempts=int(row["max_attempts"]),
                 lease_token=lease_token,
+                lease_expires_at=lease_expires_at,
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def renew_evaluation_job_lease(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> RenewedEvaluationJobLease:
+        """Atomically extend one active lease held by its capability owner."""
+
+        _require_digest(job_id, label="evaluation job ID")
+        _validate_worker_id(worker_id)
+        _validate_lease_token(lease_token)
+        if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3_600:
+            raise ValueError("lease duration must be an integer from 1 through 3600 seconds")
+        token_digest = sha256(lease_token.encode("ascii")).hexdigest()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = _utc_now()
+            lease_expires_at = _lease_expiry(now, lease_seconds)
+            row = connection.execute(
+                """
+                SELECT status, attempts, worker_id, lease_token_digest, lease_expires_at
+                FROM evaluation_jobs
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "running"
+                or row["worker_id"] != worker_id
+                or row["lease_token_digest"] is None
+                or not secrets.compare_digest(str(row["lease_token_digest"]), token_digest)
+                or row["lease_expires_at"] is None
+                or str(row["lease_expires_at"]) <= now
+            ):
+                raise EvaluationJobLeaseNotFoundError("evaluation job lease was not found")
+            if lease_expires_at <= str(row["lease_expires_at"]):
+                raise ValueError("lease duration must extend the active lease")
+            renewed_lease_token = secrets.token_urlsafe(32)
+            renewed_token_digest = sha256(renewed_lease_token.encode("ascii")).hexdigest()
+            updated = connection.execute(
+                """
+                UPDATE evaluation_jobs
+                SET lease_token_digest = ?, lease_expires_at = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (renewed_token_digest, lease_expires_at, now, job_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("evaluation job lease could not be renewed")
+            connection.commit()
+            return RenewedEvaluationJobLease(
+                job_id=job_id,
+                attempts=int(row["attempts"]),
+                lease_token=renewed_lease_token,
                 lease_expires_at=lease_expires_at,
             )
         except Exception:
@@ -1283,6 +1363,18 @@ def _validate_worker_id(worker_id: str) -> None:
         or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in worker_id)
     ):
         raise ValueError("worker ID is invalid")
+
+
+def _validate_lease_token(lease_token: str) -> None:
+    if (
+        type(lease_token) is not str
+        or not 32 <= len(lease_token) <= 128
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for character in lease_token
+        )
+    ):
+        raise ValueError("lease token is invalid")
 
 
 def _lease_expiry(now: str, lease_seconds: int) -> str:

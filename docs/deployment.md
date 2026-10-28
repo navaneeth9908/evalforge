@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, and atomic expiring worker claims. No worker executes or completes claimed jobs yet; lease renewal, retry classification, and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, and capability-authorized lease renewal. No worker executes or completes claimed jobs yet; retry classification and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -104,8 +104,10 @@ share one not-found envelope. Candidate evidence is stored in the unencrypted SQ
 submission time. A registry worker consumer can atomically claim the oldest queued or expired job
 for 1–3,600 seconds. Claims return a fresh private capability token while persisting only its digest;
 active leases exclude competing claimers, and expiry recovery stops after the third claim with
-`attempt_limit_exhausted`. There is no execution/completion path, lease renewal, retry
-classification, worker process, or multi-host queue yet.
+`attempt_limit_exhausted`. An active worker can renew for another 1–3,600 seconds only with the
+matching job ID, worker ID, and capability before expiry. Renewal must advance the current deadline,
+atomically rotates the capability token, persists only its new digest, and rejects the old token.
+There is no execution/completion path, retry classification, worker process, or multi-host queue yet.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 

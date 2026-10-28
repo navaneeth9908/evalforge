@@ -27,7 +27,7 @@ This page maps the release contract to executable evidence. A checked item means
 | Tenant-scoped compatible unique-run history with validated scores and pairwise drill-down links | Trend, corruption, and foreign/absent cases in `tests/test_api.py` and `tests/test_tenant_isolation.py` | Verified on `main` |
 | Tenant-scoped filtered metric/category/tag trends | Weighted metric means, weighted slice pass rates, unknown/ambiguous filter rejection, private-text omission, and comparison-link cases in `tests/test_api.py` | Verified on `main` |
 | Tenant-scoped dedicated redacted case-level evidence detail | Rendered metadata/resource, private-text omission, missing-case, and foreign/absent-run cases in `tests/test_api.py` and `tests/test_tenant_isolation.py` | Verified on `main` |
-| Durable tenant-scoped asynchronous evaluation jobs | Schema migration, idempotent queue submission, non-inline execution, status polling, atomic competing-worker claims, token-digest storage, expiry recovery, attempt exhaustion, role authorization, and foreign/absent non-disclosure in `tests/test_registry.py` and `tests/test_tenant_isolation.py` | Partial M6 capability on `main`; claimed work is not yet executed or completed |
+| Durable tenant-scoped asynchronous evaluation jobs | Schema migration, idempotent queue submission, non-inline execution, status polling, atomic competing-worker claims, token-digest storage, expiry recovery, attempt exhaustion, capability-authorized renewal with token rotation, role authorization, and foreign/absent non-disclosure in `tests/test_registry.py` and `tests/test_tenant_isolation.py` | Partial M6 capability on `main`; claimed work is not yet executed or completed |
 
 Run the complete credential-free tracer bullet:
 
@@ -57,7 +57,7 @@ The release includes the deterministic core and the implemented local operations
 | Basic local run dashboard | Complete |
 | Full regression analytics dashboard | Complete: tenant-scoped pairwise comparison, bounded compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case-level evidence detail |
 | Authentication and multi-tenancy | Implemented on `main`: bearer authentication, role authorization, and tenant-scoped suite, evaluation, run, report, and dashboard access with trusted-local legacy migration |
-| Production hosted control plane and distributed workers | Partial on `main`: durable tenant-scoped asynchronous evaluation jobs provide idempotent submission/status polling plus atomic expiring worker claims and bounded attempt exhaustion; execution/completion, lease renewal, retry classification, multi-host deployment, autoscaling, and high availability are not implemented |
+| Production hosted control plane and distributed workers | Partial on `main`: durable tenant-scoped asynchronous evaluation jobs provide idempotent submission/status polling, atomic expiring worker claims, bounded attempt exhaustion, and token-rotating lease renewal; execution/completion, retry classification, multi-host deployment, autoscaling, and high availability are not implemented |
 | Artifact signing and SBOM publication | Not implemented |
 
 The open items are post-v0.2.0 roadmap work. They are listed as limitations in the [threat model](threat-model.md), not hidden behind a release-readiness claim.

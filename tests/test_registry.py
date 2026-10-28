@@ -329,6 +329,181 @@ def test_evaluation_job_claim_is_atomic_and_keeps_lease_token_out_of_storage(
     assert lease_expires_at == claimed.lease_expires_at
 
 
+def test_active_worker_can_atomically_renew_its_evaluation_job_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from evalforge import registry as registry_module
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "renew-lease.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-renew-0001",
+    )
+    timestamps = iter(
+        (
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-01T00:00:10.000000Z",
+        )
+    )
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: next(timestamps))
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+
+    renewed = registry.renew_evaluation_job_lease(
+        job_id=claimed.job_id,
+        worker_id="worker-a",
+        lease_token=claimed.lease_token,
+        lease_seconds=60,
+    )
+
+    assert renewed.job_id == claimed.job_id
+    assert renewed.attempts == claimed.attempts == 1
+    assert renewed.lease_expires_at == "2026-01-01T00:01:10.000000Z"
+    with sqlite3.connect(registry.path) as connection:
+        attempts, worker_id, token_digest, lease_expires_at, updated_at = connection.execute(
+            """
+            SELECT attempts, worker_id, lease_token_digest, lease_expires_at, updated_at
+            FROM evaluation_jobs WHERE job_id = ?
+            """,
+            (claimed.job_id,),
+        ).fetchone()
+    assert attempts == 1
+    assert worker_id == "worker-a"
+    assert token_digest != claimed.lease_token
+    assert lease_expires_at == renewed.lease_expires_at
+    assert updated_at == "2026-01-01T00:00:10.000000Z"
+
+
+def test_lease_renewal_rotates_the_capability_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+    import sqlite3
+
+    from evalforge import registry as registry_module
+    from evalforge.registry import EvaluationJobLeaseNotFoundError, SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "rotate-renewal-token.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key="evaluation-job-rotate-renewal-token",
+    )
+    timestamps = iter(
+        (
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-01T00:00:10.000000Z",
+            "2026-01-01T00:00:20.000000Z",
+        )
+    )
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: next(timestamps))
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+
+    renewed = registry.renew_evaluation_job_lease(
+        job_id=claimed.job_id,
+        worker_id="worker-a",
+        lease_token=claimed.lease_token,
+        lease_seconds=60,
+    )
+
+    assert renewed.lease_token != claimed.lease_token
+    with sqlite3.connect(registry.path) as connection:
+        token_digest = connection.execute(
+            "SELECT lease_token_digest FROM evaluation_jobs WHERE job_id = ?",
+            (claimed.job_id,),
+        ).fetchone()[0]
+    assert token_digest == hashlib.sha256(renewed.lease_token.encode("ascii")).hexdigest()
+    with pytest.raises(EvaluationJobLeaseNotFoundError, match="evaluation job lease was not found"):
+        registry.renew_evaluation_job_lease(
+            job_id=claimed.job_id,
+            worker_id="worker-a",
+            lease_token=claimed.lease_token,
+            lease_seconds=120,
+        )
+
+
+@pytest.mark.parametrize("invalid_capability", ("job", "worker", "token"))
+def test_lease_renewal_rejects_unknown_capabilities_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_capability: str,
+) -> None:
+    import sqlite3
+
+    from evalforge import registry as registry_module
+    from evalforge.registry import EvaluationJobLeaseNotFoundError, SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / f"reject-renewal-{invalid_capability}.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"policy": "Allowed"},
+        idempotency_key=f"evaluation-job-reject-renewal-{invalid_capability}",
+    )
+    timestamps = iter(
+        (
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-01T00:00:10.000000Z",
+        )
+    )
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: next(timestamps))
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+    arguments = {
+        "job_id": claimed.job_id,
+        "worker_id": "worker-a",
+        "lease_token": claimed.lease_token,
+        "lease_seconds": 60,
+    }
+    if invalid_capability == "job":
+        arguments["job_id"] = "f" * 64
+    elif invalid_capability == "worker":
+        arguments["worker_id"] = "worker-b"
+    else:
+        arguments["lease_token"] = "a" * len(claimed.lease_token)
+
+    with pytest.raises(EvaluationJobLeaseNotFoundError, match="evaluation job lease was not found"):
+        registry.renew_evaluation_job_lease(**arguments)  # type: ignore[arg-type]
+
+    with sqlite3.connect(registry.path) as connection:
+        attempts, worker_id, lease_expires_at, updated_at = connection.execute(
+            """
+            SELECT attempts, worker_id, lease_expires_at, updated_at
+            FROM evaluation_jobs WHERE job_id = ?
+            """,
+            (claimed.job_id,),
+        ).fetchone()
+    assert attempts == 1
+    assert worker_id == "worker-a"
+    assert lease_expires_at == claimed.lease_expires_at
+    assert updated_at == "2026-01-01T00:00:00.000000Z"
+
+
 def test_evaluation_job_lease_starts_after_write_lock_acquisition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
