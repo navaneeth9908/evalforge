@@ -1099,3 +1099,227 @@ def test_compatible_run_history_rejects_more_than_twenty_points(tmp_path: Path) 
             anchor_run_id="0" * 64,
             limit=21,
         )
+
+
+def test_evaluation_job_completion_requires_active_capability_and_publishes_atomically(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    from evalforge.registry import EvaluationJobLeaseNotFoundError, SQLiteRunRegistry
+    from evalforge.service import _evaluation_report_payload
+
+    suite, candidate, _minimal_report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "complete-job.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate=candidate,
+        idempotency_key="evaluation-job-completion-0001",
+    )
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+    _suite_name, report = _evaluation_report_payload(
+        suite_id=stored_suite.suite_id,
+        suite_payload=suite,
+        candidate_payload=candidate,
+    )
+
+    with pytest.raises(EvaluationJobLeaseNotFoundError, match="evaluation job lease was not found"):
+        registry.complete_evaluation_job(
+            job_id=claimed.job_id,
+            worker_id="worker-a",
+            lease_token="a" * len(claimed.lease_token),
+            report=report,
+        )
+
+    running = registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id)
+    assert running is not None and running.status == "running"
+    assert registry.count_runs(tenant_id="tenant-alpha") == 0
+
+    completed = registry.complete_evaluation_job(
+        job_id=claimed.job_id,
+        worker_id="worker-a",
+        lease_token=claimed.lease_token,
+        report=report,
+    )
+
+    assert completed.status == "succeeded"
+    assert completed.attempts == 1
+    assert completed.run_id == report["run_id"]
+    assert completed.failure_code is None
+    assert registry.get_run(tenant_id="tenant-alpha", run_id=completed.run_id) is not None
+    assert registry.count_runs(tenant_id="tenant-alpha") == 1
+    assert registry.claim_evaluation_job(worker_id="worker-b", lease_seconds=30) is None
+    with sqlite3.connect(registry.path) as connection:
+        lease_state = connection.execute(
+            """
+            SELECT worker_id, lease_token_digest, lease_expires_at
+            FROM evaluation_jobs WHERE job_id = ?
+            """,
+            (claimed.job_id,),
+        ).fetchone()
+    assert lease_state == (None, None, None)
+
+
+def test_evaluation_job_completion_rejects_rehashed_derived_report_tampering(
+    tmp_path: Path,
+) -> None:
+    from evalforge.registry import SQLiteRunRegistry
+    from evalforge.service import _evaluation_report_payload
+
+    suite, candidate, _minimal_report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "tampered-completion.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate=candidate,
+        idempotency_key="evaluation-job-completion-tamper",
+    )
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+    _suite_name, report = _evaluation_report_payload(
+        suite_id=stored_suite.suite_id,
+        suite_payload=suite,
+        candidate_payload=candidate,
+    )
+    assert isinstance(report, dict)
+    tampered = {**report, "passed_cases": 0}
+
+    with pytest.raises(ValueError, match="derived evidence"):
+        registry.complete_evaluation_job(
+            job_id=claimed.job_id,
+            worker_id="worker-a",
+            lease_token=claimed.lease_token,
+            report=tampered,
+        )
+
+    running = registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id)
+    assert running is not None and running.status == "running"
+    assert registry.count_runs(tenant_id="tenant-alpha") == 0
+    completed = registry.complete_evaluation_job(
+        job_id=claimed.job_id,
+        worker_id="worker-a",
+        lease_token=claimed.lease_token,
+        report=report,
+    )
+    assert completed.status == "succeeded"
+
+
+@pytest.mark.parametrize("mutation", ("string-count", "boolean-count", "manifest"))
+def test_evaluation_job_completion_requires_exact_authoritative_report(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    from evalforge.provenance import deterministic_run_id
+    from evalforge.registry import SQLiteRunRegistry
+    from evalforge.service import _evaluation_report_payload
+
+    suite, candidate, _minimal_report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / f"authoritative-{mutation}.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate=candidate,
+        idempotency_key=f"evaluation-job-authoritative-{mutation}",
+    )
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+    _suite_name, report = _evaluation_report_payload(
+        suite_id=stored_suite.suite_id,
+        suite_payload=suite,
+        candidate_payload=candidate,
+    )
+    assert isinstance(report, dict)
+    if mutation == "string-count":
+        altered = {**report, "passed_cases": "1"}
+    elif mutation == "boolean-count":
+        altered = {**report, "passed_cases": True}
+    else:
+        manifest = "f" * 64
+        altered = {
+            **report,
+            "dataset_manifest_sha256": manifest,
+            "run_id": deterministic_run_id(
+                suite_sha256=stored_suite.suite_id,
+                candidate_sha256=str(report["candidate_sha256"]),
+                dataset_manifest_sha256=manifest,
+            ),
+        }
+
+    with pytest.raises(ValueError, match="derived evidence"):
+        registry.complete_evaluation_job(
+            job_id=claimed.job_id,
+            worker_id="worker-a",
+            lease_token=claimed.lease_token,
+            report=altered,
+        )
+
+    running = registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id)
+    assert running is not None and running.status == "running"
+    assert registry.count_runs(tenant_id="tenant-alpha") == 0
+
+
+def test_evaluation_job_completion_rechecks_expiry_after_report_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evalforge import registry as registry_module
+    from evalforge.registry import EvaluationJobLeaseNotFoundError, SQLiteRunRegistry
+    from evalforge.service import _evaluation_report_payload
+
+    suite, candidate, _minimal_report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "completion-expiry.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate=candidate,
+        idempotency_key="evaluation-job-completion-expiry",
+    )
+    _suite_name, report = _evaluation_report_payload(
+        suite_id=stored_suite.suite_id,
+        suite_payload=suite,
+        candidate_payload=candidate,
+    )
+    timestamps = iter(
+        (
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-01T00:00:00.500000Z",
+            "2026-01-01T00:00:01.100000Z",
+        )
+    )
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: next(timestamps))
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=1)
+    assert claimed is not None
+
+    with pytest.raises(EvaluationJobLeaseNotFoundError, match="evaluation job lease was not found"):
+        registry.complete_evaluation_job(
+            job_id=claimed.job_id,
+            worker_id="worker-a",
+            lease_token=claimed.lease_token,
+            report=report,
+        )
+
+    running = registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id)
+    assert running is not None and running.status == "running"
+    assert registry.count_runs(tenant_id="tenant-alpha") == 0

@@ -86,7 +86,8 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Durable tenant-scoped asynchronous evaluation submission, idempotency, and status polling
   - [x] Atomic worker claims, expiring leases, and bounded attempt exhaustion
   - [x] Capability-authorized lease renewal with atomic token rotation
-  - [ ] Worker execution/completion, retry classification, and multi-host distribution
+  - [x] Capability-authorized worker execution and atomic completion
+  - [ ] Retry classification and multi-host distribution
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics
 - [ ] Signed release artifacts, SBOM publication, and provenance attestations

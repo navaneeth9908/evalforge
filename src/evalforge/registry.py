@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Literal, cast
 
 from evalforge.auth import TRUSTED_LOCAL_TENANT_ID
+from evalforge.contracts import CandidateOutput, EvaluationSuite
+from evalforge.engine import evaluate_suite
 from evalforge.provenance import (
+    CANONICALIZATION_VERSION,
+    EVALUATION_SEMANTICS_VERSION,
     JsonValue,
     canonical_json_bytes,
     canonical_json_sha256,
@@ -920,6 +924,188 @@ class SQLiteRunRegistry:
         finally:
             connection.close()
 
+    def complete_evaluation_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        report: JsonValue,
+    ) -> StoredEvaluationJob:
+        """Atomically publish run evidence and complete one capability-owned lease."""
+
+        _require_digest(job_id, label="evaluation job ID")
+        _validate_worker_id(worker_id)
+        _validate_lease_token(lease_token)
+        token_digest = sha256(lease_token.encode("ascii")).hexdigest()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = _utc_now()
+            row = connection.execute(
+                """
+                SELECT evaluation_jobs.tenant_id, evaluation_jobs.status,
+                       evaluation_jobs.worker_id, evaluation_jobs.lease_token_digest,
+                       evaluation_jobs.lease_expires_at,
+                       evaluation_jobs.suite_id, evaluation_jobs.candidate_id,
+                       suites.digest AS suite_digest, suites.name AS suite_name,
+                       suites.payload_json AS suite_json,
+                       candidates.digest AS candidate_digest,
+                       candidates.payload_json AS candidate_json
+                FROM evaluation_jobs
+                JOIN suites ON suites.id = evaluation_jobs.suite_id
+                JOIN candidates ON candidates.id = evaluation_jobs.candidate_id
+                WHERE evaluation_jobs.job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "running"
+                or row["worker_id"] != worker_id
+                or row["lease_token_digest"] is None
+                or not secrets.compare_digest(str(row["lease_token_digest"]), token_digest)
+                or row["lease_expires_at"] is None
+                or str(row["lease_expires_at"]) <= now
+            ):
+                raise EvaluationJobLeaseNotFoundError("evaluation job lease was not found")
+
+            report_object = _require_object(report, label="report")
+            report_json = canonical_json_bytes(report_object).decode("utf-8")
+            report_sha256 = sha256(report_json.encode("utf-8")).hexdigest()
+            suite_sha256 = str(row["suite_digest"])
+            candidate_sha256 = str(row["candidate_digest"])
+            suite_name = str(row["suite_name"])
+            if report_object.get("suite_name") != suite_name:
+                raise ValueError("suite name must match suite and report evidence")
+            run_id = _require_digest(report_object.get("run_id"), label="run ID")
+            if (
+                _require_digest(report_object.get("suite_sha256"), label="suite digest")
+                != suite_sha256
+            ):
+                raise ValueError("report suite digest does not match suite evidence")
+            if (
+                _require_digest(report_object.get("candidate_sha256"), label="candidate digest")
+                != candidate_sha256
+            ):
+                raise ValueError("report candidate digest does not match candidate evidence")
+            manifest_value = report_object.get("dataset_manifest_sha256")
+            dataset_manifest_sha256 = (
+                None
+                if manifest_value is None
+                else _require_digest(manifest_value, label="dataset manifest digest")
+            )
+            expected_run_id = deterministic_run_id(
+                suite_sha256=suite_sha256,
+                candidate_sha256=candidate_sha256,
+                dataset_manifest_sha256=dataset_manifest_sha256,
+            )
+            if run_id != expected_run_id:
+                raise ValueError("report run ID does not match its versioned evidence")
+            release_ready = report_object.get("release_ready")
+            if type(release_ready) is not bool:
+                raise ValueError("report release decision must be Boolean")
+            _validate_derived_evaluation_report(
+                suite_json=str(row["suite_json"]),
+                candidate_json=str(row["candidate_json"]),
+                suite_sha256=suite_sha256,
+                candidate_sha256=candidate_sha256,
+                report=report_object,
+            )
+            completion_time = _utc_now()
+            if str(row["lease_expires_at"]) <= completion_time:
+                raise EvaluationJobLeaseNotFoundError("evaluation job lease was not found")
+            now = completion_time
+
+            stored_run = connection.execute(
+                "SELECT 1 FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if stored_run is None:
+                connection.execute(
+                    """
+                    INSERT INTO runs(
+                        run_id, suite_id, candidate_id, dataset_manifest_digest, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        int(row["suite_id"]),
+                        int(row["candidate_id"]),
+                        dataset_manifest_sha256,
+                        now,
+                    ),
+                )
+            stored_report = connection.execute(
+                "SELECT 1 FROM reports WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if stored_report is None:
+                connection.execute(
+                    """
+                    INSERT INTO reports(run_id, digest, payload_json, release_ready, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (run_id, report_sha256, report_json, int(release_ready), now),
+                )
+            stored_binding = connection.execute(
+                """
+                SELECT suites.digest AS suite_digest,
+                       candidates.digest AS candidate_digest,
+                       runs.dataset_manifest_digest,
+                       reports.digest AS report_digest,
+                       reports.payload_json AS report_json,
+                       reports.release_ready
+                FROM runs
+                JOIN suites ON suites.id = runs.suite_id
+                JOIN candidates ON candidates.id = runs.candidate_id
+                JOIN reports ON reports.run_id = runs.run_id
+                WHERE runs.run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if stored_binding is None:
+                raise RuntimeError("stored run could not be validated")
+            if (
+                stored_binding["suite_digest"] != suite_sha256
+                or stored_binding["candidate_digest"] != candidate_sha256
+                or stored_binding["report_digest"] != report_sha256
+                or stored_binding["dataset_manifest_digest"] != dataset_manifest_sha256
+                or stored_binding["report_json"] != report_json
+                or bool(stored_binding["release_ready"]) != release_ready
+            ):
+                raise ValueError("run ID is already bound to different immutable evidence")
+            _insert_tenant_run_membership(
+                connection,
+                tenant_id=str(row["tenant_id"]),
+                run_id=run_id,
+                created_at=now,
+            )
+            updated = connection.execute(
+                """
+                UPDATE evaluation_jobs
+                SET status = 'succeeded', run_id = ?, failure_code = NULL,
+                    worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (run_id, now, job_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("evaluation job completion could not be persisted")
+            completed = connection.execute(
+                _EVALUATION_JOB_SELECT + " WHERE evaluation_jobs.job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if completed is None:
+                raise RuntimeError("completed evaluation job could not be validated")
+            connection.commit()
+            return _stored_evaluation_job(completed)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def create_suite(self, *, tenant_id: str, name: str, suite: JsonValue) -> StoredSuite:
         """Persist a suite idempotently by its canonical content digest."""
 
@@ -1306,6 +1492,53 @@ def _stored_evaluation_job(row: sqlite3.Row) -> StoredEvaluationJob:
         submitted_at=str(row["submitted_at"]),
         updated_at=str(row["updated_at"]),
     )
+
+
+def _validate_derived_evaluation_report(
+    *,
+    suite_json: str,
+    candidate_json: str,
+    suite_sha256: str,
+    candidate_sha256: str,
+    report: dict[str, JsonValue],
+) -> None:
+    try:
+        suite = EvaluationSuite.model_validate_json(suite_json)
+        candidate = json.loads(candidate_json)
+        if not isinstance(candidate, dict):
+            raise ValueError("candidate evidence must be an object")
+        candidate_outputs = {
+            case_id: (output if isinstance(output, str) else CandidateOutput.model_validate(output))
+            for case_id, output in candidate.items()
+        }
+        expected_evaluation = evaluate_suite(
+            suite.cases,
+            candidate_outputs,
+            policy=suite.resolved_policy,
+        )
+        expected_run_id = deterministic_run_id(
+            suite_sha256=suite_sha256,
+            candidate_sha256=candidate_sha256,
+            dataset_manifest_sha256=None,
+        )
+        expected_report = cast(
+            JsonValue,
+            {
+                "suite_name": suite.name,
+                **expected_evaluation.model_dump(mode="json"),
+                "schema_version": 5,
+                "suite_sha256": suite_sha256,
+                "candidate_sha256": candidate_sha256,
+                "dataset_manifest_sha256": None,
+                "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+                "canonicalization_version": CANONICALIZATION_VERSION,
+                "run_id": expected_run_id,
+            },
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("report failed derived evidence validation") from exc
+    if canonical_json_bytes(report) != canonical_json_bytes(expected_report):
+        raise ValueError("report failed derived evidence validation")
 
 
 def _require_object(value: JsonValue, *, label: str) -> dict[str, JsonValue]:

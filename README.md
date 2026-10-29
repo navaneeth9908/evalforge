@@ -81,6 +81,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Durable tenant-scoped asynchronous evaluation submission with idempotent queue records and status polling
 - Atomic oldest-first worker leases with token-digest storage, bounded expiry recovery, and terminal attempt exhaustion
 - Capability-authorized worker lease renewal with atomic token rotation and stale-capability rejection
+- One-shot worker execution with deterministic report revalidation and atomic tenant-scoped completion
 - Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
 - Non-root container image, loopback-only Compose deployment, and bounded health smoke
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
@@ -88,7 +89,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, and capability-authorized lease renewal. Worker execution/completion, retry classification, and multi-host deployment remain roadmap work.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, capability-authorized lease renewal, and a one-shot `EvaluationWorker` that executes and completes one claimed job. Retry classification, a long-running worker process, and multi-host deployment remain roadmap work.
 
 ## Quick start
 
@@ -200,8 +201,13 @@ while reusing it for different evidence returns `409`. Submission does not execu
 The registry can atomically claim the oldest available job with a bounded lease, keep only a digest
 of the capability token at rest, reclaim expired work, and stop after three claims. An active worker
 can extend its deadline only with the matching job, worker ID, and capability; renewal atomically
-rotates the token and rejects stale holders. This slice does not yet execute or complete claimed
-work. Pagination and request sizes are bounded. Validation,
+rotates the token and rejects stale holders. `EvaluationWorker.run_once()` claims at most one job,
+runs the same deterministic evaluator used by synchronous requests, and atomically publishes the
+validated immutable report, tenant run membership, succeeded job state, and run ID only while its
+capability remains active. Completion re-derives report evidence from the stored suite and candidate
+and clears the lease. An empty queue returns `None`. Evaluation errors publish no run and leave the
+bounded lease available for expiry recovery; retry classification and a long-running or multi-host
+worker service are not implemented. Pagination and request sizes are bounded. Validation,
 missing-resource, and unexpected errors use redaction-safe envelopes that do not echo submitted
 prompts, candidate outputs, database details, or exception traces. `/dashboard` provides a
 read-only local run table with report links and same-suite comparison links. The

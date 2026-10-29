@@ -214,6 +214,61 @@ def _trend_score(
     return report.weighted_pass_rate
 
 
+def _candidate_payload(
+    candidate_outputs: Mapping[str, str | CandidateOutput],
+) -> JsonValue:
+    return cast(
+        JsonValue,
+        {
+            case_id: (
+                output.model_dump(mode="json") if isinstance(output, CandidateOutput) else output
+            )
+            for case_id, output in candidate_outputs.items()
+        },
+    )
+
+
+def _evaluation_report_payload(
+    *,
+    suite_id: str,
+    suite_payload: JsonValue,
+    candidate_payload: JsonValue,
+) -> tuple[str, JsonValue]:
+    suite = EvaluationSuite.model_validate(suite_payload)
+    if not isinstance(candidate_payload, dict):
+        raise ValueError("candidate evidence must be an object")
+    candidate_outputs = {
+        case_id: (output if isinstance(output, str) else CandidateOutput.model_validate(output))
+        for case_id, output in candidate_payload.items()
+    }
+    report = evaluate_suite(
+        suite.cases,
+        candidate_outputs,
+        policy=suite.resolved_policy,
+    )
+    candidate_sha256 = canonical_json_sha256(candidate_payload)
+    run_id = deterministic_run_id(
+        suite_sha256=suite_id,
+        candidate_sha256=candidate_sha256,
+        dataset_manifest_sha256=None,
+    )
+    report_payload = cast(
+        JsonValue,
+        {
+            "suite_name": suite.name,
+            **report.model_dump(mode="json"),
+            "schema_version": 5,
+            "suite_sha256": suite_id,
+            "candidate_sha256": candidate_sha256,
+            "dataset_manifest_sha256": None,
+            "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "run_id": run_id,
+        },
+    )
+    return suite.name, report_payload
+
+
 class EvalForgeService:
     """Coordinate typed contracts, core evaluation, and local persistence."""
 
@@ -248,46 +303,15 @@ class EvalForgeService:
         stored_suite = self.registry.get_suite(tenant_id=tenant_id, suite_id=suite_id)
         if stored_suite is None:
             raise SuiteNotFoundError("evaluation suite was not found")
-        suite = EvaluationSuite.model_validate(stored_suite.suite)
-        report = evaluate_suite(
-            suite.cases,
-            candidate_outputs,
-            policy=suite.resolved_policy,
-        )
-        candidate_payload = cast(
-            JsonValue,
-            {
-                case_id: (
-                    output.model_dump(mode="json")
-                    if isinstance(output, CandidateOutput)
-                    else output
-                )
-                for case_id, output in candidate_outputs.items()
-            },
-        )
-        candidate_sha256 = canonical_json_sha256(candidate_payload)
-        run_id = deterministic_run_id(
-            suite_sha256=suite_id,
-            candidate_sha256=candidate_sha256,
-            dataset_manifest_sha256=None,
-        )
-        report_payload = cast(
-            JsonValue,
-            {
-                "suite_name": suite.name,
-                **report.model_dump(mode="json"),
-                "schema_version": 5,
-                "suite_sha256": suite_id,
-                "candidate_sha256": candidate_sha256,
-                "dataset_manifest_sha256": None,
-                "evaluation_semantics_version": EVALUATION_SEMANTICS_VERSION,
-                "canonicalization_version": CANONICALIZATION_VERSION,
-                "run_id": run_id,
-            },
+        candidate_payload = _candidate_payload(candidate_outputs)
+        suite_name, report_payload = _evaluation_report_payload(
+            suite_id=suite_id,
+            suite_payload=stored_suite.suite,
+            candidate_payload=candidate_payload,
         )
         return self.registry.create_run(
             tenant_id=tenant_id,
-            suite_name=suite.name,
+            suite_name=suite_name,
             suite=stored_suite.suite,
             candidate=candidate_payload,
             report=report_payload,
@@ -303,17 +327,7 @@ class EvalForgeService:
     ) -> StoredEvaluationJob:
         """Persist an idempotent evaluation request without executing it inline."""
 
-        candidate_payload = cast(
-            JsonValue,
-            {
-                case_id: (
-                    output.model_dump(mode="json")
-                    if isinstance(output, CandidateOutput)
-                    else output
-                )
-                for case_id, output in candidate_outputs.items()
-            },
-        )
+        candidate_payload = _candidate_payload(candidate_outputs)
         try:
             return self.registry.create_evaluation_job(
                 tenant_id=tenant_id,
