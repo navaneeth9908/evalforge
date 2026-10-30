@@ -645,6 +645,143 @@ def test_expired_evaluation_job_leases_retry_only_to_the_attempt_limit(
     assert terminal.failure_code == "attempt_limit_exhausted"
 
 
+def test_invalid_evaluation_failure_is_atomic_and_clears_active_lease(tmp_path: Path) -> None:
+    import sqlite3
+
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "terminal-failure.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    queued = registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"unexpected": "output"},
+        idempotency_key="evaluation-job-terminal-failure-0001",
+    )
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+
+    failed = registry.fail_evaluation_job(
+        job_id=claimed.job_id,
+        worker_id="worker-a",
+        lease_token=claimed.lease_token,
+        failure_code="invalid_evaluation",
+    )
+
+    assert failed.job_id == queued.job_id
+    assert failed.status == "failed"
+    assert failed.attempts == 1
+    assert failed.run_id is None
+    assert failed.failure_code == "invalid_evaluation"
+    assert registry.count_runs(tenant_id="tenant-alpha") == 0
+    assert registry.claim_evaluation_job(worker_id="worker-b", lease_seconds=30) is None
+    with sqlite3.connect(registry.path) as connection:
+        lease_state = connection.execute(
+            """
+            SELECT worker_id, lease_token_digest, lease_expires_at
+            FROM evaluation_jobs WHERE job_id = ?
+            """,
+            (queued.job_id,),
+        ).fetchone()
+    assert lease_state == (None, None, None)
+
+
+@pytest.mark.parametrize("failure_code", ("temporary_error", 1))
+def test_evaluation_job_failure_rejects_unclassified_codes_without_mutation(
+    tmp_path: Path, failure_code: object
+) -> None:
+    from evalforge.registry import SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "unclassified-failure.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"unexpected": "output"},
+        idempotency_key="evaluation-job-unclassified-failure-0001",
+    )
+    claimed = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=30)
+    assert claimed is not None
+
+    with pytest.raises(ValueError, match="evaluation job failure code is invalid"):
+        registry.fail_evaluation_job(
+            job_id=claimed.job_id,
+            worker_id="worker-a",
+            lease_token=claimed.lease_token,
+            failure_code=failure_code,  # type: ignore[arg-type]
+        )
+
+    current = registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=claimed.job_id)
+    assert current is not None
+    assert current.status == "running"
+    assert current.attempts == 1
+    assert current.failure_code is None
+
+
+def test_stale_worker_cannot_fail_job_after_another_worker_reclaims_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from evalforge import registry as registry_module
+    from evalforge.registry import EvaluationJobLeaseNotFoundError, SQLiteRunRegistry
+
+    suite, _candidate, _report = _evaluation_payloads()
+    registry = SQLiteRunRegistry(tmp_path / "stale-failure.db")
+    stored_suite = registry.create_suite(
+        tenant_id="tenant-alpha",
+        name="registry-smoke",
+        suite=suite,
+    )
+    registry.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate={"unexpected": "output"},
+        idempotency_key="evaluation-job-stale-failure-0001",
+    )
+    timestamps = iter(
+        (
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-01T00:00:02.000000Z",
+            "2026-01-01T00:00:02.000000Z",
+        )
+    )
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: next(timestamps))
+    stale = registry.claim_evaluation_job(worker_id="worker-a", lease_seconds=1)
+    active = registry.claim_evaluation_job(worker_id="worker-b", lease_seconds=30)
+    assert stale is not None and active is not None
+
+    with pytest.raises(EvaluationJobLeaseNotFoundError, match="evaluation job lease was not found"):
+        registry.fail_evaluation_job(
+            job_id=stale.job_id,
+            worker_id="worker-a",
+            lease_token=stale.lease_token,
+            failure_code="invalid_evaluation",
+        )
+
+    current = registry.get_evaluation_job(tenant_id="tenant-alpha", job_id=active.job_id)
+    assert current is not None
+    assert current.status == "running"
+    assert current.attempts == 2
+    with sqlite3.connect(registry.path) as connection:
+        worker_id, lease_expires_at = connection.execute(
+            "SELECT worker_id, lease_expires_at FROM evaluation_jobs WHERE job_id = ?",
+            (active.job_id,),
+        ).fetchone()
+    assert worker_id == "worker-b"
+    assert lease_expires_at == active.lease_expires_at
+
+
 @pytest.mark.parametrize(
     "statement",
     (

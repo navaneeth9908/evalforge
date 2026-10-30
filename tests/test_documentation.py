@@ -165,8 +165,10 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Filtered metric/slice trends" in roadmap
     assert "- [x] Dedicated redacted case-level evidence detail" in roadmap
     assert "- [x] Capability-authorized worker execution and atomic completion" in roadmap
-    assert "- [ ] Retry classification and multi-host distribution" in roadmap
+    assert "- [x] Terminal invalid-evaluation classification" in roadmap
+    assert "- [ ] Transient retry backoff and multi-host distribution" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
+    assert "terminally classifies invalid evaluation input" in readme
 
     architecture = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     assert "cross-dataset scorecard" in architecture.lower()

@@ -1106,6 +1106,70 @@ class SQLiteRunRegistry:
         finally:
             connection.close()
 
+    def fail_evaluation_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        failure_code: Literal["invalid_evaluation"],
+    ) -> StoredEvaluationJob:
+        """Atomically fail invalid work through its active lease capability."""
+
+        _require_digest(job_id, label="evaluation job ID")
+        _validate_worker_id(worker_id)
+        _validate_lease_token(lease_token)
+        if type(failure_code) is not str or failure_code != "invalid_evaluation":
+            raise ValueError("evaluation job failure code is invalid")
+        token_digest = sha256(lease_token.encode("ascii")).hexdigest()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = _utc_now()
+            row = connection.execute(
+                """
+                SELECT status, worker_id, lease_token_digest, lease_expires_at
+                FROM evaluation_jobs
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "running"
+                or row["worker_id"] != worker_id
+                or row["lease_token_digest"] is None
+                or not secrets.compare_digest(str(row["lease_token_digest"]), token_digest)
+                or row["lease_expires_at"] is None
+                or str(row["lease_expires_at"]) <= now
+            ):
+                raise EvaluationJobLeaseNotFoundError("evaluation job lease was not found")
+            updated = connection.execute(
+                """
+                UPDATE evaluation_jobs
+                SET status = 'failed', run_id = NULL, failure_code = ?,
+                    worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (failure_code, now, job_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("evaluation job failure could not be persisted")
+            failed = connection.execute(
+                _EVALUATION_JOB_SELECT + " WHERE evaluation_jobs.job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if failed is None:
+                raise RuntimeError("failed evaluation job could not be validated")
+            connection.commit()
+            return _stored_evaluation_job(failed)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def create_suite(self, *, tenant_id: str, name: str, suite: JsonValue) -> StoredSuite:
         """Persist a suite idempotently by its canonical content digest."""
 

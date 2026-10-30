@@ -25,11 +25,19 @@ class EvaluationWorker:
         )
         if claimed is None:
             return None
-        _suite_name, report = _evaluation_report_payload(
-            suite_id=claimed.suite_id,
-            suite_payload=claimed.suite,
-            candidate_payload=claimed.candidate,
-        )
+        try:
+            _suite_name, report = _evaluation_report_payload(
+                suite_id=claimed.suite_id,
+                suite_payload=claimed.suite,
+                candidate_payload=claimed.candidate,
+            )
+        except ValueError:
+            return self.registry.fail_evaluation_job(
+                job_id=claimed.job_id,
+                worker_id=self.worker_id,
+                lease_token=claimed.lease_token,
+                failure_code="invalid_evaluation",
+            )
         return self.registry.complete_evaluation_job(
             job_id=claimed.job_id,
             worker_id=self.worker_id,

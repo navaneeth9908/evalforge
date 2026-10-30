@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized lease renewal, and a one-shot local worker with atomic successful completion. Retry classification, a supervised worker loop, and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized lease renewal, and a one-shot local worker with atomic successful completion or terminal invalid-input classification. Transient retry backoff, a supervised worker loop, and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -107,12 +107,15 @@ active leases exclude competing claimers, and expiry recovery stops after the th
 `attempt_limit_exhausted`. An active worker can renew for another 1–3,600 seconds only with the
 matching job ID, worker ID, and capability before expiry. Renewal must advance the current deadline,
 atomically rotates the capability token, persists only its new digest, and rejects the old token.
-`EvaluationWorker.run_once()` claims at most one job, evaluates its immutable stored inputs, and
-completes it only while the exact job/worker/capability lease remains active. The completion transaction
+`EvaluationWorker.run_once()` claims at most one job and evaluates its immutable stored inputs. Valid
+work completes only while the exact job/worker/capability lease remains active. The completion transaction
 re-derives the report, inserts or verifies immutable run evidence, grants the job tenant's run membership,
-records `succeeded` plus the run ID, and clears lease state. Invalid, stale, expired, or tampered
-completion attempts publish no run. Operators must invoke this primitive from their own supervised
-process; retry classification, a built-in worker loop, and a multi-host queue are not implemented.
+records `succeeded` plus the run ID, and clears lease state. A deterministic input-validation failure is
+terminally recorded as `invalid_evaluation` through that same active capability, clears the lease, and
+publishes no run or exception text. Stale, expired, or tampered completion/failure attempts publish no run.
+Unexpected execution and storage failures remain recoverable through lease expiry. Operators must invoke
+this primitive from their own supervised process; transient backoff, a built-in worker loop, and a
+multi-host queue are not implemented.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 

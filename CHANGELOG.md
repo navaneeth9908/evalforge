@@ -17,10 +17,11 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Atomic oldest-first worker claims with expiring leases, capability-token digest storage, expiry recovery, and terminal three-attempt exhaustion.
 - Capability-authorized worker lease renewal with deadline advancement, atomic token rotation, and stale-capability rejection.
 - One-shot deterministic worker execution with derived-report revalidation and atomic tenant-scoped job completion.
+- Terminal invalid-evaluation classification with capability-authorized failure recording, lease cleanup, and no run publication.
 
 ### Security
 
-- Protected suite, evaluation, asynchronous-job, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Pairwise comparisons, filtered trends, and case detail require tenant-visible anchors, revalidate stored evidence, render bounded redacted projections, reject ambiguous trend filters, and treat foreign run or job identifiers like absent identifiers. Job idempotency keys and worker capability tokens are stored only as SHA-256 digests; renewal rotates capabilities, and completion requires the active job/worker/token tuple, re-derives the submitted report from immutable inputs, and commits run membership plus terminal state in one transaction. Stale or mismatched holders receive no lease-state disclosure, and lease-state triggers reject partial running states. Legacy suites and runs migrate only to trusted-local ownership.
+- Protected suite, evaluation, asynchronous-job, run, report, and dashboard routes when access control is configured; health remains unauthenticated. Pairwise comparisons, filtered trends, and case detail require tenant-visible anchors, revalidate stored evidence, render bounded redacted projections, reject ambiguous trend filters, and treat foreign run or job identifiers like absent identifiers. Job idempotency keys and worker capability tokens are stored only as SHA-256 digests; renewal rotates capabilities, while completion and terminal invalid-input failure require the active job/worker/token tuple. Completion re-derives immutable evidence and commits run membership plus terminal state in one transaction; terminal failure persists only a bounded code and publishes no run. Stale or mismatched holders receive no lease-state disclosure, and lease-state triggers reject partial running states. Legacy suites and runs migrate only to trusted-local ownership.
 
 ## [0.2.0] - 2026-10-08
 
