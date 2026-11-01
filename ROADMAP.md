@@ -88,7 +88,8 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Capability-authorized lease renewal with atomic token rotation
   - [x] Capability-authorized worker execution and atomic completion
   - [x] Terminal invalid-evaluation classification with capability-authorized failure recording
-  - [ ] Transient retry backoff and multi-host distribution
+  - [x] Capability-authorized transient retry scheduling with bounded exponential backoff
+  - [ ] Supervised worker service and multi-host distribution
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics
 - [ ] Signed release artifacts, SBOM publication, and provenance attestations

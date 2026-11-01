@@ -318,6 +318,63 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        6,
+        (
+            "ALTER TABLE evaluation_jobs ADD COLUMN available_at TEXT",
+            """
+            UPDATE evaluation_jobs
+            SET available_at = submitted_at
+            WHERE status = 'queued'
+            """,
+            """
+            CREATE INDEX evaluation_jobs_available_idx
+            ON evaluation_jobs(status, available_at, submitted_at, job_id)
+            """,
+            """
+            CREATE TRIGGER evaluation_jobs_availability_state_insert
+            BEFORE INSERT ON evaluation_jobs
+            WHEN NOT (
+                (NEW.status = 'queued'
+                 AND NEW.available_at IS NOT NULL
+                 AND NEW.available_at >= NEW.submitted_at
+                 AND NEW.available_at >= NEW.updated_at
+                 AND length(NEW.available_at) = 27
+                 AND NEW.available_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+                 AND julianday(substr(NEW.available_at, 1, 19) || 'Z') IS NOT NULL
+                 AND strftime(
+                     '%Y-%m-%dT%H:%M:%S',
+                     julianday(substr(NEW.available_at, 1, 19) || 'Z')
+                 ) = substr(NEW.available_at, 1, 19))
+                OR
+                (NEW.status != 'queued' AND NEW.available_at IS NULL)
+            )
+            BEGIN SELECT RAISE(ABORT, 'evaluation job availability state is invalid'); END
+            """,
+            """
+            CREATE TRIGGER evaluation_jobs_availability_state_update
+            BEFORE UPDATE ON evaluation_jobs
+            WHEN NOT (
+                (NEW.status = 'queued'
+                 AND NEW.available_at IS NOT NULL
+                 AND NEW.available_at >= NEW.submitted_at
+                 AND NEW.available_at >= NEW.updated_at
+                 AND length(NEW.available_at) = 27
+                 AND NEW.available_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+                 AND julianday(substr(NEW.available_at, 1, 19) || 'Z') IS NOT NULL
+                 AND strftime(
+                     '%Y-%m-%dT%H:%M:%S',
+                     julianday(substr(NEW.available_at, 1, 19) || 'Z')
+                 ) = substr(NEW.available_at, 1, 19))
+                OR
+                (NEW.status != 'queued' AND NEW.available_at IS NULL)
+            )
+            BEGIN SELECT RAISE(ABORT, 'evaluation job availability state is invalid'); END
+            """,
+        ),
+    ),
 )
 
 
@@ -409,6 +466,7 @@ class StoredEvaluationJob:
     max_attempts: int
     run_id: str | None
     failure_code: str | None
+    available_at: str | None
     submitted_at: str
     updated_at: str
 
@@ -712,9 +770,9 @@ class SQLiteRunRegistry:
                 INSERT INTO evaluation_jobs(
                     job_id, tenant_id, idempotency_key_digest, request_digest,
                     suite_id, candidate_id, status, attempts, max_attempts,
-                    run_id, failure_code, submitted_at, updated_at
+                    run_id, failure_code, submitted_at, updated_at, available_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, 3, NULL, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, 3, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -723,6 +781,7 @@ class SQLiteRunRegistry:
                     request_digest,
                     int(suite_row["id"]),
                     candidate_id,
+                    submitted_at,
                     submitted_at,
                     submitted_at,
                 ),
@@ -783,7 +842,7 @@ class SQLiteRunRegistry:
                 UPDATE evaluation_jobs
                 SET status = 'failed', failure_code = 'attempt_limit_exhausted',
                     worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
-                    updated_at = ?
+                    available_at = NULL, updated_at = ?
                 WHERE attempts >= max_attempts
                   AND (
                       status = 'queued'
@@ -803,6 +862,7 @@ class SQLiteRunRegistry:
                 JOIN candidates ON candidates.id = evaluation_jobs.candidate_id
                 WHERE (
                        evaluation_jobs.status = 'queued'
+                       AND evaluation_jobs.available_at <= ?
                        AND evaluation_jobs.attempts < evaluation_jobs.max_attempts
                    )
                    OR (
@@ -813,7 +873,7 @@ class SQLiteRunRegistry:
                 ORDER BY evaluation_jobs.submitted_at, evaluation_jobs.job_id
                 LIMIT 1
                 """,
-                (now,),
+                (now, now),
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -826,7 +886,7 @@ class SQLiteRunRegistry:
                 UPDATE evaluation_jobs
                 SET status = 'running', attempts = ?, failure_code = NULL,
                     worker_id = ?, lease_token_digest = ?, lease_expires_at = ?,
-                    updated_at = ?
+                    available_at = NULL, updated_at = ?
                 WHERE job_id = ?
                 """,
                 (
@@ -918,6 +978,80 @@ class SQLiteRunRegistry:
                 lease_token=renewed_lease_token,
                 lease_expires_at=lease_expires_at,
             )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def retry_evaluation_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        backoff_seconds: int,
+    ) -> StoredEvaluationJob:
+        """Requeue one transient failure after a capability-authorized delay."""
+
+        _require_digest(job_id, label="evaluation job ID")
+        _validate_worker_id(worker_id)
+        _validate_lease_token(lease_token)
+        if type(backoff_seconds) is not int or not 1 <= backoff_seconds <= 3_600:
+            raise ValueError("retry backoff must be an integer from 1 through 3600 seconds")
+        token_digest = sha256(lease_token.encode("ascii")).hexdigest()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = _utc_now()
+            row = connection.execute(
+                """
+                SELECT status, attempts, max_attempts, worker_id,
+                       lease_token_digest, lease_expires_at
+                FROM evaluation_jobs
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "running"
+                or row["worker_id"] != worker_id
+                or row["lease_token_digest"] is None
+                or not secrets.compare_digest(str(row["lease_token_digest"]), token_digest)
+                or row["lease_expires_at"] is None
+                or str(row["lease_expires_at"]) <= now
+            ):
+                raise EvaluationJobLeaseNotFoundError("evaluation job lease was not found")
+            attempts = int(row["attempts"])
+            if attempts >= int(row["max_attempts"]):
+                status = "failed"
+                failure_code = "attempt_limit_exhausted"
+                available_at = None
+            else:
+                status = "queued"
+                failure_code = None
+                available_at = _lease_expiry(now, backoff_seconds)
+            updated = connection.execute(
+                """
+                UPDATE evaluation_jobs
+                SET status = ?, run_id = NULL, failure_code = ?,
+                    worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
+                    available_at = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (status, failure_code, available_at, now, job_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("evaluation job retry could not be persisted")
+            retrying = connection.execute(
+                _EVALUATION_JOB_SELECT + " WHERE evaluation_jobs.job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if retrying is None:
+                raise RuntimeError("retrying evaluation job could not be validated")
+            connection.commit()
+            return _stored_evaluation_job(retrying)
         except Exception:
             connection.rollback()
             raise
@@ -1085,7 +1219,7 @@ class SQLiteRunRegistry:
                 UPDATE evaluation_jobs
                 SET status = 'succeeded', run_id = ?, failure_code = NULL,
                     worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
-                    updated_at = ?
+                    available_at = NULL, updated_at = ?
                 WHERE job_id = ?
                 """,
                 (run_id, now, job_id),
@@ -1149,7 +1283,7 @@ class SQLiteRunRegistry:
                 UPDATE evaluation_jobs
                 SET status = 'failed', run_id = NULL, failure_code = ?,
                     worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
-                    updated_at = ?
+                    available_at = NULL, updated_at = ?
                 WHERE job_id = ?
                 """,
                 (failure_code, now, job_id),
@@ -1420,6 +1554,7 @@ SELECT
     evaluation_jobs.max_attempts,
     evaluation_jobs.run_id,
     evaluation_jobs.failure_code,
+    evaluation_jobs.available_at,
     evaluation_jobs.submitted_at,
     evaluation_jobs.updated_at
 FROM evaluation_jobs
@@ -1553,6 +1688,7 @@ def _stored_evaluation_job(row: sqlite3.Row) -> StoredEvaluationJob:
         max_attempts=int(row["max_attempts"]),
         run_id=None if row["run_id"] is None else str(row["run_id"]),
         failure_code=None if row["failure_code"] is None else str(row["failure_code"]),
+        available_at=None if row["available_at"] is None else str(row["available_at"]),
         submitted_at=str(row["submitted_at"]),
         updated_at=str(row["updated_at"]),
     )

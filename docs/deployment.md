@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized lease renewal, and a one-shot local worker with atomic successful completion or terminal invalid-input classification. Transient retry backoff, a supervised worker loop, and distributed scheduling remain incomplete. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized lease renewal, and a one-shot local worker with atomic successful completion, terminal invalid-input classification, or bounded transient retry scheduling. A supervised worker loop and distributed execution remain roadmap work. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -112,10 +112,12 @@ work completes only while the exact job/worker/capability lease remains active. 
 re-derives the report, inserts or verifies immutable run evidence, grants the job tenant's run membership,
 records `succeeded` plus the run ID, and clears lease state. A deterministic input-validation failure is
 terminally recorded as `invalid_evaluation` through that same active capability, clears the lease, and
-publishes no run or exception text. Stale, expired, or tampered completion/failure attempts publish no run.
-Unexpected execution and storage failures remain recoverable through lease expiry. Operators must invoke
-this primitive from their own supervised process; transient backoff, a built-in worker loop, and a
-multi-host queue are not implemented.
+publishes no run or exception text. An unexpected evaluation exception is requeued only through the same
+active capability, with configurable exponential backoff capped at 3,600 seconds; the final attempt records
+`attempt_limit_exhausted`. Availability timestamps are canonical, cannot be backdated, and gate claims.
+Stale, expired, or tampered completion/failure/retry attempts publish no run. Unexpected storage failures
+remain recoverable through lease expiry. Operators must invoke this primitive from their own supervised
+process; a built-in worker loop and multi-host queue are not implemented.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
@@ -130,7 +132,7 @@ If an operator chooses to place EvalForge behind a shared network, the surroundi
 - database and artifact backup, encryption, retention, and access controls;
 - structured log redaction and monitoring;
 - a deployment-specific recovery and incident response procedure; and
-- a supervised queue-worker process when asynchronous jobs are enabled; the repository supplies a one-shot execution/completion primitive, not lifecycle management, backoff policy, autoscaling, or multi-host coordination.
+- a supervised queue-worker process when asynchronous jobs are enabled; the repository supplies a one-shot execution/completion/retry primitive, not lifecycle management, autoscaling, or multi-host coordination.
 
 The repository does not claim those controls are built into v0.2.0. SQLite serializes local lease claims but is appropriate for a trusted local process and CI evidence, not a horizontally scaled multi-host worker service.
 
