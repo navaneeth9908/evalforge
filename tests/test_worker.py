@@ -433,3 +433,169 @@ def test_worker_terminally_fails_invalid_candidate_without_retry_or_run_publicat
     assert failed.failure_code == "invalid_evaluation"
     assert registry.count_runs(tenant_id="tenant-alpha") == 0
     assert worker.run_once() is None
+
+
+def test_worker_service_once_processes_one_durable_job(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from evalforge.contracts import EvaluationSuite
+    from evalforge.registry import SQLiteRunRegistry
+    from evalforge.service import EvalForgeService
+    from evalforge.worker_service import main
+
+    pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'evalforge-worker = "evalforge.worker_service:main"' in pyproject
+
+    database_path = tmp_path / "worker-service.db"
+    registry = SQLiteRunRegistry(database_path)
+    service = EvalForgeService(registry)
+    suite = EvaluationSuite.model_validate(
+        {
+            "schema_version": 1,
+            "name": "worker-service-smoke",
+            "minimum_pass_rate": 1.0,
+            "cases": [
+                {
+                    "case_id": "policy",
+                    "prompt": "State the synthetic policy.",
+                    "expected_output": "Allowed",
+                }
+            ],
+        }
+    )
+    stored_suite = service.create_suite(suite, tenant_id="tenant-alpha")
+    queued = service.create_evaluation_job(
+        tenant_id="tenant-alpha",
+        suite_id=stored_suite.suite_id,
+        candidate_outputs={"policy": "Allowed"},
+        idempotency_key="worker-service-once-0001",
+    )
+
+    exit_code = main(
+        [
+            "--database-path",
+            str(database_path),
+            "--worker-id",
+            "worker-service-a",
+            "--once",
+        ]
+    )
+
+    assert exit_code == 0
+    completed = service.get_evaluation_job(tenant_id="tenant-alpha", job_id=queued.job_id)
+    assert completed.status == "succeeded"
+    assert completed.attempts == 1
+    assert completed.run_id is not None
+    assert json.loads(capsys.readouterr().out) == {
+        "attempts": 1,
+        "job_id": queued.job_id,
+        "processed": True,
+        "status": "succeeded",
+    }
+
+
+def test_worker_service_once_reports_an_empty_queue(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from evalforge.worker_service import main
+
+    exit_code = main(
+        [
+            "--database-path",
+            str(tmp_path / "empty-worker-service.db"),
+            "--worker-id",
+            "worker-service-a",
+            "--once",
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == {"processed": False}
+
+
+def test_worker_service_rejects_relative_database_path_without_creating_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evalforge.worker_service import main
+
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as rejected:
+        main(
+            [
+                "--database-path",
+                "relative/worker.db",
+                "--worker-id",
+                "worker-service-a",
+                "--once",
+            ]
+        )
+
+    assert rejected.value.code == 2
+    assert not (tmp_path / "relative").exists()
+
+
+def test_worker_service_redacts_unexpected_operational_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from evalforge.worker import EvaluationWorker
+    from evalforge.worker_service import main
+
+    sensitive_value = "database password=worker-service-secret"
+
+    def fail_run_once(_worker: EvaluationWorker) -> object:
+        raise RuntimeError(sensitive_value)
+
+    monkeypatch.setattr(EvaluationWorker, "run_once", fail_run_once)
+
+    exit_code = main(
+        [
+            "--database-path",
+            str(tmp_path / "failed-worker-service.db"),
+            "--worker-id",
+            "worker-service-a",
+            "--once",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "error": "worker_execution_failed",
+        "processed": False,
+    }
+    assert sensitive_value not in captured.err
+
+
+def test_worker_service_redacts_registry_initialization_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from evalforge.worker_service import main
+
+    exit_code = main(
+        [
+            "--database-path",
+            str(tmp_path),
+            "--worker-id",
+            "worker-service-a",
+            "--once",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "error": "worker_execution_failed",
+        "processed": False,
+    }
+    assert str(tmp_path) not in captured.err

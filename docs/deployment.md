@@ -119,6 +119,19 @@ Stale, expired, or tampered completion/failure/retry attempts publish no run. Un
 remain recoverable through lease expiry. Operators must invoke this primitive from their own supervised
 process; a built-in worker loop and multi-host queue are not implemented.
 
+The installed one-shot command provides a process-manager-friendly claim attempt without embedding Python:
+
+```bash
+evalforge-worker --database-path 'C:/absolute/path/evalforge.db' \
+  --worker-id worker-host-a --once
+```
+
+The path must be absolute. Lease and retry backoff durations remain bounded through
+`--lease-seconds` and `--retry-backoff-seconds`. The command exits after one claim attempt and prints
+either bounded `job_id`, status, and attempt metadata or `{"processed":false}`; it never prints suite,
+candidate, report, lease-token, or exception content. A process manager may invoke this command on a
+schedule, but the repository still does not provide a continuously supervised loop or multi-host queue.
+
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
 ## Production boundary

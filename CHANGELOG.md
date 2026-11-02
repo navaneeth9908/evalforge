@@ -19,6 +19,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - One-shot deterministic worker execution with derived-report revalidation and atomic tenant-scoped job completion.
 - Terminal invalid-evaluation classification with capability-authorized failure recording, lease cleanup, and no run publication.
 - Capability-authorized transient retry scheduling with bounded exponential backoff, canonical availability state, and terminal attempt exhaustion.
+- Installed one-shot worker command with an explicit absolute registry path, worker identity, bounded operational JSON, and redacted failures.
 
 ### Security
 

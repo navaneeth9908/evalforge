@@ -22,6 +22,7 @@ dependencies = [
 [project.scripts]
 evalforge = "evalforge.cli:app"
 evalforge-smoke = "evalforge.deployment_smoke:main"
+evalforge-worker = "evalforge.worker_service:main"
 
 [dependency-groups]
 dev = [

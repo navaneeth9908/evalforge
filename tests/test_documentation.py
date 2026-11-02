@@ -86,6 +86,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert version == __version__ == "0.2.0"
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert f"## [{version}] - 2026-10-08" in changelog
+    assert "Installed one-shot worker command" in changelog
 
     threat_model = (ROOT / "docs" / "threat-model.md").read_text(encoding="utf-8")
     for term in (
@@ -133,6 +134,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "durable tenant-scoped asynchronous evaluation jobs" in acceptance
     assert "capability-authorized one-shot worker execution" in acceptance
     assert "tests/test_worker.py" in acceptance
+    assert "deployable one-shot worker command" in acceptance
 
     for example in (
         "code-harness-evidence.json",
@@ -166,6 +168,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Dedicated redacted case-level evidence detail" in roadmap
     assert "- [x] Capability-authorized worker execution and atomic completion" in roadmap
     assert "- [x] Terminal invalid-evaluation classification" in roadmap
+    assert "- [x] Deployable one-shot worker command" in roadmap
     assert "- [x] Capability-authorized transient retry scheduling" in roadmap
     assert "- [ ] Supervised worker service and multi-host distribution" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
@@ -181,6 +184,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     deployment = (ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
     assert "--factory evalforge.server:create_app_from_environment" in deployment
     assert "evalforge-smoke --base-url http://127.0.0.1:8000" in deployment
+    assert "evalforge-worker --database-path" in deployment
     for filter_query in ("?metric=", "?category=", "?tag="):
         assert filter_query in deployment
     assert "evalforge.server:app" not in deployment
