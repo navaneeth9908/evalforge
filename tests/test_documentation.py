@@ -134,7 +134,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "durable tenant-scoped asynchronous evaluation jobs" in acceptance
     assert "capability-authorized one-shot worker execution" in acceptance
     assert "tests/test_worker.py" in acceptance
-    assert "deployable one-shot worker command" in acceptance
+    assert "deployable one-shot worker command and supervised worker mode" in acceptance
 
     for example in (
         "code-harness-evidence.json",
@@ -170,7 +170,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Terminal invalid-evaluation classification" in roadmap
     assert "- [x] Deployable one-shot worker command" in roadmap
     assert "- [x] Capability-authorized transient retry scheduling" in roadmap
-    assert "- [ ] Supervised worker service and multi-host distribution" in roadmap
+    assert "- [x] Supervised queue-draining worker service" in roadmap
+    assert "- [ ] Multi-host distribution and horizontally safe queue backend" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
     assert "terminally classifies invalid evaluation input" in readme
     assert "bounded exponential backoff" in readme
@@ -185,6 +186,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "--factory evalforge.server:create_app_from_environment" in deployment
     assert "evalforge-smoke --base-url http://127.0.0.1:8000" in deployment
     assert "evalforge-worker --database-path" in deployment
+    assert "--serve --poll-interval-seconds 2" in deployment
     for filter_query in ("?metric=", "?category=", "?tag="):
         assert filter_query in deployment
     assert "evalforge.server:app" not in deployment

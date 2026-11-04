@@ -20,6 +20,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Terminal invalid-evaluation classification with capability-authorized failure recording, lease cleanup, and no run publication.
 - Capability-authorized transient retry scheduling with bounded exponential backoff, canonical availability state, and terminal attempt exhaustion.
 - Installed one-shot worker command with an explicit absolute registry path, worker identity, bounded operational JSON, and redacted failures.
+- Supervised queue-draining worker mode with bounded polling, graceful supported console termination, redacted operational JSON, and an optional finite idle limit for deployment smokes.
 
 ### Security
 

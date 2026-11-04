@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized lease renewal, and a one-shot local worker with atomic successful completion, terminal invalid-input classification, or bounded transient retry scheduling. A supervised worker loop and distributed execution remain roadmap work. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized lease renewal, and one-shot or supervised local workers with atomic successful completion, terminal invalid-input classification, or bounded transient retry scheduling. Multi-host distributed execution remains roadmap work. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -116,10 +116,10 @@ publishes no run or exception text. An unexpected evaluation exception is requeu
 active capability, with configurable exponential backoff capped at 3,600 seconds; the final attempt records
 `attempt_limit_exhausted`. Availability timestamps are canonical, cannot be backdated, and gate claims.
 Stale, expired, or tampered completion/failure/retry attempts publish no run. Unexpected storage failures
-remain recoverable through lease expiry. Operators must invoke this primitive from their own supervised
-process; a built-in worker loop and multi-host queue are not implemented.
+remain recoverable through lease expiry. The installed service loop provides local lifecycle management;
+a horizontally safe multi-host queue is not implemented.
 
-The installed one-shot command provides a process-manager-friendly claim attempt without embedding Python:
+The installed command provides a process-manager-friendly one-shot claim without embedding Python:
 
 ```bash
 evalforge-worker --database-path 'C:/absolute/path/evalforge.db' \
@@ -129,8 +129,22 @@ evalforge-worker --database-path 'C:/absolute/path/evalforge.db' \
 The path must be absolute. Lease and retry backoff durations remain bounded through
 `--lease-seconds` and `--retry-backoff-seconds`. The command exits after one claim attempt and prints
 either bounded `job_id`, status, and attempt metadata or `{"processed":false}`; it never prints suite,
-candidate, report, lease-token, or exception content. A process manager may invoke this command on a
-schedule, but the repository still does not provide a continuously supervised loop or multi-host queue.
+candidate, report, lease-token, or exception content.
+
+For a continuously supervised local worker, use service mode:
+
+```bash
+evalforge-worker --database-path 'C:/absolute/path/evalforge.db' \
+  --worker-id worker-host-a --serve --poll-interval-seconds 2
+```
+
+Service mode drains ready jobs sequentially, waits on an interruptible 1–60 second poll interval when
+idle, and exits after the active attempt on POSIX SIGINT/SIGTERM or Windows CTRL_BREAK/SIGBREAK. A hard
+Windows process termination cannot be intercepted. Startup emits `{"service_started":true}`; each
+processed job emits the same bounded JSON projection, and graceful exit emits only `processed_jobs`
+and `service_stopped`.
+`--max-idle-polls N` provides a finite drain/smoke mode and is rejected with `--once`. Multiple local
+processes still rely on SQLite lease serialization; this is not a horizontally safe multi-host queue.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
@@ -145,9 +159,9 @@ If an operator chooses to place EvalForge behind a shared network, the surroundi
 - database and artifact backup, encryption, retention, and access controls;
 - structured log redaction and monitoring;
 - a deployment-specific recovery and incident response procedure; and
-- a supervised queue-worker process when asynchronous jobs are enabled; the repository supplies a one-shot execution/completion/retry primitive, not lifecycle management, autoscaling, or multi-host coordination.
+- autoscaling and multi-host queue coordination when asynchronous jobs span machines; the repository supplies local supervised lifecycle management, not a horizontally safe distributed queue.
 
-The repository does not claim those controls are built into v0.2.0. SQLite serializes local lease claims but is appropriate for a trusted local process and CI evidence, not a horizontally scaled multi-host worker service.
+The repository does not claim those controls are built into v0.2.0. SQLite serializes local lease claims but is appropriate for trusted local worker processes and CI evidence, not a horizontally scaled multi-host worker service.
 
 ## Verification
 

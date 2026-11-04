@@ -90,7 +90,8 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Terminal invalid-evaluation classification with capability-authorized failure recording
   - [x] Capability-authorized transient retry scheduling with bounded exponential backoff
   - [x] Deployable one-shot worker command with explicit registry and worker identity
-  - [ ] Supervised worker service and multi-host distribution
+  - [x] Supervised queue-draining worker service with graceful termination and bounded idle smoke mode
+  - [ ] Multi-host distribution and horizontally safe queue backend
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics
 - [ ] Signed release artifacts, SBOM publication, and provenance attestations

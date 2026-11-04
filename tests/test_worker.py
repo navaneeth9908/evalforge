@@ -599,3 +599,140 @@ def test_worker_service_redacts_registry_initialization_failure(
         "processed": False,
     }
     assert str(tmp_path) not in captured.err
+
+
+def test_worker_service_mode_drains_ready_jobs_and_stops_after_bounded_idle_poll(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from evalforge.contracts import EvaluationSuite
+    from evalforge.registry import SQLiteRunRegistry
+    from evalforge.service import EvalForgeService
+    from evalforge.worker_service import main
+
+    database_path = tmp_path / "supervised-worker-service.db"
+    registry = SQLiteRunRegistry(database_path)
+    service = EvalForgeService(registry)
+    suite = EvaluationSuite.model_validate(
+        {
+            "schema_version": 1,
+            "name": "supervised-worker-service",
+            "minimum_pass_rate": 1.0,
+            "cases": [
+                {
+                    "case_id": "policy",
+                    "prompt": "State the synthetic policy.",
+                    "expected_output": "Allowed",
+                }
+            ],
+        }
+    )
+    stored_suite = service.create_suite(suite, tenant_id="tenant-alpha")
+    queued = {
+        service.create_evaluation_job(
+            tenant_id="tenant-alpha",
+            suite_id=stored_suite.suite_id,
+            candidate_outputs={"policy": "Allowed"},
+            idempotency_key=f"supervised-worker-service-{index:04d}",
+        ).job_id
+        for index in range(2)
+    }
+
+    exit_code = main(
+        [
+            "--database-path",
+            str(database_path),
+            "--worker-id",
+            "worker-service-a",
+            "--serve",
+            "--max-idle-polls",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output[0] == {"service_started": True}
+    assert {entry["job_id"] for entry in output[1:-1]} == queued
+    assert all(entry["processed"] is True for entry in output[1:-1])
+    assert output[-1] == {"processed_jobs": 2, "service_stopped": "idle_limit"}
+    assert all(
+        service.get_evaluation_job(tenant_id="tenant-alpha", job_id=job_id).status == "succeeded"
+        for job_id in queued
+    )
+
+
+def test_worker_service_rejects_zero_poll_interval_before_creating_state(
+    tmp_path: Path,
+) -> None:
+    from evalforge.worker_service import main
+
+    database_path = tmp_path / "invalid-service-poll.db"
+
+    with pytest.raises(SystemExit) as rejected:
+        main(
+            [
+                "--database-path",
+                str(database_path),
+                "--worker-id",
+                "worker-service-a",
+                "--serve",
+                "--poll-interval-seconds",
+                "0",
+                "--max-idle-polls",
+                "1",
+            ]
+        )
+
+    assert rejected.value.code == 2
+    assert not database_path.exists()
+
+
+def test_worker_service_exits_gracefully_on_supported_platform_signal(tmp_path: Path) -> None:
+    import json
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    database_path = tmp_path / "signaled-worker-service.db"
+    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "evalforge.worker_service",
+            "--database-path",
+            str(database_path),
+            "--worker-id",
+            "worker-service-signal",
+            "--serve",
+            "--poll-interval-seconds",
+            "60",
+        ],
+        cwd=Path(__file__).parents[1],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=creation_flags,
+    )
+    try:
+        assert process.stdout is not None
+        ready_line = process.stdout.readline()
+        assert json.loads(ready_line) == {"service_started": True}
+        if os.name == "nt":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            process.send_signal(signal.SIGTERM)
+        remaining_stdout, stderr = process.communicate(timeout=5)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    assert process.returncode == 0
+    assert stderr == ""
+    assert [json.loads(line) for line in remaining_stdout.splitlines()] == [
+        {"processed_jobs": 0, "service_stopped": "signal"}
+    ]

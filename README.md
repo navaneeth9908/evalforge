@@ -85,6 +85,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Terminal invalid-evaluation classification with capability-authorized failure recording and no run publication
 - Capability-authorized transient retry scheduling with bounded exponential backoff and terminal attempt exhaustion
 - Installed `evalforge-worker` one-shot command with explicit absolute registry path, worker identity, and redacted JSON status
+- Supervised `evalforge-worker --serve` mode with bounded polling, graceful termination, and finite idle-drain smokes
 - Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
 - Non-root container image, loopback-only Compose deployment, and bounded health smoke
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
@@ -92,7 +93,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, capability-authorized lease renewal, and a one-shot `EvaluationWorker` that completes valid work, terminally classifies invalid evaluation input, or schedules an unexpected evaluation failure for a capability-authorized retry with bounded exponential backoff. The installed `evalforge-worker` command exposes that one-shot operation to deployment tooling. A supervised worker process and multi-host deployment remain roadmap work.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, capability-authorized lease renewal, and a one-shot `EvaluationWorker` that completes valid work, terminally classifies invalid evaluation input, or schedules an unexpected evaluation failure for a capability-authorized retry with bounded exponential backoff. The installed `evalforge-worker` command exposes both one-shot and continuously supervised queue-draining modes to deployment tooling. Multi-host distribution remains roadmap work.
 
 ## Quick start
 
@@ -211,9 +212,12 @@ capability remains active. Completion re-derives report evidence from the stored
 and clears the lease. Deterministically invalid input fails terminally without a run. An unexpected
 evaluation exception is not persisted: the active capability atomically requeues the job after bounded
 exponential backoff, or fails it with `attempt_limit_exhausted` on the final attempt. An empty queue
-returns `None`. The installed `evalforge-worker` command performs one explicit claim attempt against
-an absolute database path and prints only bounded job metadata or `{"processed":false}`. A supervised
-or multi-host worker service is not implemented. Pagination and request sizes are bounded. Validation,
+returns `None`. The installed `evalforge-worker` command can perform one explicit claim attempt or
+continuously drain ready work against an absolute database path. Service mode polls every 1–60 seconds,
+stops after the active attempt on POSIX SIGINT/SIGTERM or Windows CTRL_BREAK/SIGBREAK, and offers a
+bounded idle-poll mode for deployment smokes. Hard process termination cannot be intercepted. It prints
+only a startup marker, bounded job metadata, and a final stop summary. Multi-host worker
+distribution is not implemented. Pagination and request sizes are bounded. Validation,
 missing-resource, and unexpected errors use redaction-safe envelopes that do not echo submitted
 prompts, candidate outputs, database details, or exception traces. `/dashboard` provides a
 read-only local run table with report links and same-suite comparison links. The
