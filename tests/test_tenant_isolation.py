@@ -192,6 +192,115 @@ def test_evaluation_jobs_are_idempotent_tenant_scoped_and_do_not_run_inline(
     assert runs.json()["total"] == 0
 
 
+def test_admin_worker_claim_is_tenant_scoped_and_editor_cannot_consume_jobs(
+    tmp_path: Path,
+) -> None:
+    from evalforge.api import create_app
+    from evalforge.auth import AccessCredential
+    from evalforge.contracts import EvaluationSuite
+
+    alpha_admin_token = "tenant-alpha-admin-token-00000000001"
+    alpha_editor_token = "tenant-alpha-editor-token-0000000001"
+    beta_admin_token = "tenant-beta-admin-token-000000000001"
+    app = create_app(
+        tmp_path / "tenant-worker-claims.db",
+        access_credentials=(
+            AccessCredential(token=alpha_admin_token, tenant_id="tenant-alpha", role="admin"),
+            AccessCredential(token=alpha_editor_token, tenant_id="tenant-alpha", role="editor"),
+            AccessCredential(token=beta_admin_token, tenant_id="tenant-beta", role="admin"),
+        ),
+    )
+
+    with TestClient(app) as client:
+        alpha_suite_id = client.post(
+            "/api/v1/suites",
+            headers=_authorization(alpha_editor_token),
+            json=_suite("alpha-private-worker-suite"),
+        ).json()["suite_id"]
+        beta_suite_id = client.post(
+            "/api/v1/suites",
+            headers=_authorization(beta_admin_token),
+            json=_suite("beta-private-worker-suite"),
+        ).json()["suite_id"]
+        alpha_job = client.post(
+            "/api/v1/evaluation-jobs",
+            headers={
+                **_authorization(alpha_editor_token),
+                "Idempotency-Key": "alpha-remote-worker-job-0001",
+            },
+            json={"suite_id": alpha_suite_id, "candidate_outputs": {"policy": "alpha-private"}},
+        ).json()
+        beta_job = client.post(
+            "/api/v1/evaluation-jobs",
+            headers={
+                **_authorization(beta_admin_token),
+                "Idempotency-Key": "beta-remote-worker-job-00001",
+            },
+            json={"suite_id": beta_suite_id, "candidate_outputs": {"policy": "beta-private"}},
+        ).json()
+
+        forbidden = client.post(
+            "/api/v1/worker-claims",
+            headers=_authorization(alpha_editor_token),
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            headers=_authorization(alpha_admin_token),
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        )
+        empty = client.post(
+            "/api/v1/worker-claims",
+            headers=_authorization(alpha_admin_token),
+            json={"worker_id": "remote-worker-b", "lease_seconds": 30},
+        )
+        beta_visible = client.get(
+            f"/api/v1/evaluation-jobs/{beta_job['job_id']}",
+            headers=_authorization(beta_admin_token),
+        )
+
+    assert forbidden.status_code == 403
+    assert claimed.status_code == 200
+    assert claimed.json() == {
+        "job": {
+            "job_id": alpha_job["job_id"],
+            "suite_id": alpha_suite_id,
+            "suite": EvaluationSuite.model_validate(
+                _suite("alpha-private-worker-suite")
+            ).model_dump(mode="json", exclude_none=True),
+            "candidate": {"policy": "alpha-private"},
+            "attempts": 1,
+            "max_attempts": 3,
+            "lease_token": claimed.json()["job"]["lease_token"],
+            "lease_expires_at": claimed.json()["job"]["lease_expires_at"],
+        }
+    }
+    assert len(claimed.json()["job"]["lease_token"]) == 43
+    assert empty.status_code == 200
+    assert empty.json() == {"job": None}
+    assert beta_visible.status_code == 200
+    assert beta_visible.json()["status"] == "queued"
+    assert beta_visible.json()["attempts"] == 0
+    assert "beta-private" not in claimed.text
+
+
+def test_worker_claim_rejects_coercive_lease_durations(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(create_app(tmp_path / "strict-worker-claims.db")) as client:
+        responses = [
+            client.post(
+                "/api/v1/worker-claims",
+                json={"worker_id": "strict-worker", "lease_seconds": value},
+            )
+            for value in (True, 1.0, "1")
+        ]
+
+    expected = {"error": {"code": "validation_error", "message": "request validation failed"}}
+    assert all(response.status_code == 422 for response in responses)
+    assert all(response.json() == expected for response in responses)
+
+
 def test_run_report_and_dashboard_views_are_tenant_scoped(tmp_path: Path) -> None:
     from evalforge.api import create_app
     from evalforge.auth import AccessCredential

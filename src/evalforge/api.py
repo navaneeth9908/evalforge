@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from html import escape
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, Query, Request, Security, status
@@ -27,7 +27,13 @@ from evalforge.contracts import (
     PersistedEvaluationReport,
     Sha256Digest,
 )
-from evalforge.registry import RunSummary, SQLiteRunRegistry, StoredEvaluationJob, StoredRun
+from evalforge.registry import (
+    ClaimedEvaluationJob,
+    RunSummary,
+    SQLiteRunRegistry,
+    StoredEvaluationJob,
+    StoredRun,
+)
 from evalforge.service import (
     CaseEvidenceNotFoundError,
     EvalForgeService,
@@ -151,6 +157,38 @@ class EvaluationJobResponse(BaseModel):
     updated_at: str
 
 
+class WorkerClaimRequest(BaseModel):
+    """Bounded tenant worker identity and lease request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    worker_id: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+    lease_seconds: int = Field(strict=True, ge=1, le=3_600)
+
+
+class ClaimedEvaluationJobResponse(BaseModel):
+    """Capability-bearing work item returned only to its tenant administrator."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    job_id: Sha256Digest
+    suite_id: Sha256Digest
+    suite: dict[str, object]
+    candidate: dict[str, object]
+    attempts: int = Field(ge=1, le=10)
+    max_attempts: int = Field(ge=1, le=10)
+    lease_token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    lease_expires_at: str
+
+
+class WorkerClaimResponse(BaseModel):
+    """Tenant queue claim result; ``job`` is absent when no work is ready."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    job: ClaimedEvaluationJobResponse | None
+
+
 class RunSummaryResponse(BaseModel):
     """Compact content-addressed run history row."""
 
@@ -220,6 +258,27 @@ def _evaluation_job_response(stored: StoredEvaluationJob) -> EvaluationJobRespon
         failure_code=stored.failure_code,
         submitted_at=stored.submitted_at,
         updated_at=stored.updated_at,
+    )
+
+
+def _worker_claim_response(claimed: ClaimedEvaluationJob | None) -> WorkerClaimResponse:
+    if claimed is None:
+        return WorkerClaimResponse(job=None)
+    EvaluationSuite.model_validate(claimed.suite)
+    EvaluationRequest.model_validate(
+        {"suite_id": claimed.suite_id, "candidate_outputs": claimed.candidate}
+    )
+    return WorkerClaimResponse(
+        job=ClaimedEvaluationJobResponse(
+            job_id=claimed.job_id,
+            suite_id=claimed.suite_id,
+            suite=cast(dict[str, object], claimed.suite),
+            candidate=cast(dict[str, object], claimed.candidate),
+            attempts=claimed.attempts,
+            max_attempts=claimed.max_attempts,
+            lease_token=claimed.lease_token,
+            lease_expires_at=claimed.lease_expires_at,
+        )
     )
 
 
@@ -636,8 +695,20 @@ def create_app(
             )
         return principal
 
+    def require_admin(
+        principal: AuthenticatedPrincipal = authenticate_dependency,
+    ) -> AuthenticatedPrincipal:
+        if principal.role != "admin":
+            raise APIError(
+                status_code=403,
+                code="permission_denied",
+                message="permission denied",
+            )
+        return principal
+
     read_dependency = Depends(require_read)
     write_dependency = Depends(require_write)
+    admin_dependency = Depends(require_admin)
 
     @app.exception_handler(APIError)
     async def handle_api_error(_request: Request, exc: APIError) -> JSONResponse:
@@ -859,6 +930,22 @@ def create_app(
                 message="evaluation job was not found",
             ) from exc
         return _evaluation_job_response(stored)
+
+    @app.post(
+        "/api/v1/worker-claims",
+        response_model=WorkerClaimResponse,
+        tags=["evaluation-jobs"],
+    )
+    def claim_evaluation_job(
+        request: WorkerClaimRequest,
+        principal: AuthenticatedPrincipal = admin_dependency,
+    ) -> WorkerClaimResponse:
+        claimed = registry.claim_evaluation_job(
+            worker_id=request.worker_id,
+            lease_seconds=request.lease_seconds,
+            tenant_id=principal.tenant_id,
+        )
+        return _worker_claim_response(claimed)
 
     @app.post(
         "/api/v1/evaluations",

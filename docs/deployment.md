@@ -66,8 +66,9 @@ application, and attempts to change its database or access credentials are rejec
 credential value cannot silently downgrade authentication. Failed initialization remains fail-closed
 for the process lifetime. Inject this value
 from a deployment secret manager; do not commit it, place it in Compose files, or pass it on a command
-line. Health remains public. Suite, evaluation, run, report, and dashboard routes require a bearer
-token; readers can inspect evidence and queued job status, while editors and admins can also create suites, synchronous evaluations, and asynchronous evaluation jobs.
+line. Health remains public. Suite, evaluation, run, report, dashboard, and worker-claim routes require
+a bearer token; readers can inspect evidence and queued job status, editors and admins can create suites,
+synchronous evaluations, and asynchronous evaluation jobs, and only admins can claim worker jobs.
 
 Suite membership is scoped to the authenticated principal's tenant. Suite totals and pagination are
 filtered before response construction, and evaluation treats a foreign suite digest exactly like an
@@ -101,7 +102,14 @@ executing it inline. It requires a 16–128 character visible-ASCII `Idempotency
 SHA-256 digest, returns the original job for an exact replay, and rejects reuse for different evidence.
 `GET /api/v1/evaluation-jobs/{job_id}` exposes only bounded status metadata. Foreign and absent jobs
 share one not-found envelope. Candidate evidence is stored in the unencrypted SQLite database at
-submission time. A registry worker consumer can atomically claim the oldest queued or expired job
+submission time. `POST /api/v1/worker-claims` accepts a bounded `worker_id` and `lease_seconds` from
+1 through 3,600, requires the admin role, and atomically claims only the authenticated tenant's oldest
+queued or expired job. It returns `{"job":null}` when none is ready; otherwise it returns the normalized
+suite, candidate, job metadata, and a fresh private lease capability. Editor requests fail with `403`,
+and foreign queued evidence is neither consumed nor disclosed. Because the response carries private
+evaluation inputs and the lease capability, do not log it and require TLS outside loopback. HTTP lease
+renewal, result publication, failure, and retry routes are not implemented, so this is one bounded
+remote-claim slice rather than complete multi-host execution. A registry worker consumer can atomically claim the oldest queued or expired job
 for 1–3,600 seconds. Claims return a fresh private capability token while persisting only its digest;
 active leases exclude competing claimers, and expiry recovery stops after the third claim with
 `attempt_limit_exhausted`. An active worker can renew for another 1–3,600 seconds only with the

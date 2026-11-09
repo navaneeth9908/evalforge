@@ -826,19 +826,24 @@ class SQLiteRunRegistry:
         *,
         worker_id: str,
         lease_seconds: int,
+        tenant_id: str | None = None,
     ) -> ClaimedEvaluationJob | None:
-        """Atomically lease the oldest available job for one bounded attempt."""
+        """Atomically lease the oldest available job, optionally within one tenant."""
 
         _validate_worker_id(worker_id)
         if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3_600:
             raise ValueError("lease duration must be an integer from 1 through 3600 seconds")
+        if tenant_id is not None:
+            _validate_tenant_id(tenant_id)
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             now = _utc_now()
             lease_expires_at = _lease_expiry(now, lease_seconds)
+            exhausted_tenant_clause = "" if tenant_id is None else " AND tenant_id = ?"
+            exhausted_parameters = (now, now) if tenant_id is None else (now, now, tenant_id)
             connection.execute(
-                """
+                f"""
                 UPDATE evaluation_jobs
                 SET status = 'failed', failure_code = 'attempt_limit_exhausted',
                     worker_id = NULL, lease_token_digest = NULL, lease_expires_at = NULL,
@@ -848,11 +853,14 @@ class SQLiteRunRegistry:
                       status = 'queued'
                       OR (status = 'running' AND lease_expires_at <= ?)
                   )
+                  {exhausted_tenant_clause}
                 """,
-                (now, now),
+                exhausted_parameters,
             )
+            tenant_clause = "" if tenant_id is None else " AND evaluation_jobs.tenant_id = ?"
+            claim_parameters = (now, now) if tenant_id is None else (now, now, tenant_id)
             row = connection.execute(
-                """
+                f"""
                 SELECT evaluation_jobs.job_id, evaluation_jobs.tenant_id,
                        evaluation_jobs.attempts, evaluation_jobs.max_attempts,
                        suites.digest AS suite_digest, suites.payload_json AS suite_json,
@@ -861,19 +869,22 @@ class SQLiteRunRegistry:
                 JOIN suites ON suites.id = evaluation_jobs.suite_id
                 JOIN candidates ON candidates.id = evaluation_jobs.candidate_id
                 WHERE (
-                       evaluation_jobs.status = 'queued'
-                       AND evaluation_jobs.available_at <= ?
-                       AND evaluation_jobs.attempts < evaluation_jobs.max_attempts
-                   )
-                   OR (
-                       evaluation_jobs.status = 'running'
-                       AND evaluation_jobs.lease_expires_at <= ?
-                       AND evaluation_jobs.attempts < evaluation_jobs.max_attempts
-                   )
+                    (
+                        evaluation_jobs.status = 'queued'
+                        AND evaluation_jobs.available_at <= ?
+                        AND evaluation_jobs.attempts < evaluation_jobs.max_attempts
+                    )
+                    OR (
+                        evaluation_jobs.status = 'running'
+                        AND evaluation_jobs.lease_expires_at <= ?
+                        AND evaluation_jobs.attempts < evaluation_jobs.max_attempts
+                    )
+                )
+                {tenant_clause}
                 ORDER BY evaluation_jobs.submitted_at, evaluation_jobs.job_id
                 LIMIT 1
                 """,
-                (now, now),
+                claim_parameters,
             ).fetchone()
             if row is None:
                 connection.commit()
