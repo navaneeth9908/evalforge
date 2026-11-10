@@ -456,6 +456,10 @@ class EvaluationJobLeaseNotFoundError(LookupError):
     """A worker capability does not identify one active evaluation-job lease."""
 
 
+class EvaluationJobLeaseDurationError(ValueError):
+    """A requested duration would not extend the active lease deadline."""
+
+
 @dataclass(frozen=True)
 class StoredEvaluationJob:
     """Tenant-scoped operational state for one durable evaluation request."""
@@ -936,12 +940,15 @@ class SQLiteRunRegistry:
         worker_id: str,
         lease_token: str,
         lease_seconds: int,
+        tenant_id: str | None = None,
     ) -> RenewedEvaluationJobLease:
-        """Atomically extend one active lease held by its capability owner."""
+        """Extend an active lease, optionally constrained to one tenant."""
 
         _require_digest(job_id, label="evaluation job ID")
         _validate_worker_id(worker_id)
         _validate_lease_token(lease_token)
+        if tenant_id is not None:
+            _validate_tenant_id(tenant_id)
         if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3_600:
             raise ValueError("lease duration must be an integer from 1 through 3600 seconds")
         token_digest = sha256(lease_token.encode("ascii")).hexdigest()
@@ -950,13 +957,15 @@ class SQLiteRunRegistry:
             connection.execute("BEGIN IMMEDIATE")
             now = _utc_now()
             lease_expires_at = _lease_expiry(now, lease_seconds)
+            tenant_clause = "" if tenant_id is None else " AND tenant_id = ?"
+            parameters = (job_id,) if tenant_id is None else (job_id, tenant_id)
             row = connection.execute(
-                """
+                f"""
                 SELECT status, attempts, worker_id, lease_token_digest, lease_expires_at
                 FROM evaluation_jobs
-                WHERE job_id = ?
+                WHERE job_id = ?{tenant_clause}
                 """,
-                (job_id,),
+                parameters,
             ).fetchone()
             if (
                 row is None
@@ -969,7 +978,7 @@ class SQLiteRunRegistry:
             ):
                 raise EvaluationJobLeaseNotFoundError("evaluation job lease was not found")
             if lease_expires_at <= str(row["lease_expires_at"]):
-                raise ValueError("lease duration must extend the active lease")
+                raise EvaluationJobLeaseDurationError("lease duration must extend the active lease")
             renewed_lease_token = secrets.token_urlsafe(32)
             renewed_token_digest = sha256(renewed_lease_token.encode("ascii")).hexdigest()
             updated = connection.execute(

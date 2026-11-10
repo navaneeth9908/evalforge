@@ -107,9 +107,13 @@ submission time. `POST /api/v1/worker-claims` accepts a bounded `worker_id` and 
 queued or expired job. It returns `{"job":null}` when none is ready; otherwise it returns the normalized
 suite, candidate, job metadata, and a fresh private lease capability. Editor requests fail with `403`,
 and foreign queued evidence is neither consumed nor disclosed. Because the response carries private
-evaluation inputs and the lease capability, do not log it and require TLS outside loopback. HTTP lease
-renewal, result publication, failure, and retry routes are not implemented, so this is one bounded
-remote-claim slice rather than complete multi-host execution. A registry worker consumer can atomically claim the oldest queued or expired job
+evaluation inputs and the lease capability, do not log it and require TLS outside loopback.
+`POST /api/v1/worker-claims/{job_id}/renew` requires an admin from the same tenant plus the matching
+worker ID and active capability. It rotates the capability atomically, returns the extended deadline,
+and uses one generic `404` for foreign, absent, stale, expired, or mismatched leases. A duration that
+would not advance the current deadline returns a redaction-safe `400` without mutation. Result
+publication, failure, and retry routes are not implemented, so this remains a bounded remote-worker
+slice rather than complete multi-host execution. A registry worker consumer can atomically claim the oldest queued or expired job
 for 1–3,600 seconds. Claims return a fresh private capability token while persisting only its digest;
 active leases exclude competing claimers, and expiry recovery stops after the third claim with
 `attempt_limit_exhausted`. An active worker can renew for another 1–3,600 seconds only with the

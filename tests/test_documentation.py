@@ -76,6 +76,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "/dashboard/trends" in readme
     assert "/dashboard/cases" in readme
     assert "POST /api/v1/worker-claims" in readme
+    assert "POST /api/v1/worker-claims/{job_id}/renew" in readme
     assert "dedicated case-level drill-down remain future work" not in readme
     assert "filtered metric, category, and tag trends" in readme
 
@@ -137,6 +138,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "tests/test_worker.py" in acceptance
     assert "deployable one-shot worker command and supervised worker mode" in acceptance
     assert "tenant-scoped admin worker claim API" in acceptance
+    assert "tenant-scoped HTTP lease renewal" in acceptance
 
     for example in (
         "code-harness-evidence.json",
@@ -174,6 +176,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Capability-authorized transient retry scheduling" in roadmap
     assert "- [x] Supervised queue-draining worker service" in roadmap
     assert "- [x] Tenant-scoped admin worker claim API" in roadmap
+    assert "- [x] Tenant-scoped HTTP lease renewal with capability rotation" in roadmap
     assert "- [ ] Multi-host distribution and horizontally safe queue backend" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
     assert "terminally classifies invalid evaluation input" in readme
@@ -191,6 +194,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "evalforge-worker --database-path" in deployment
     assert "--serve --poll-interval-seconds 2" in deployment
     assert "POST /api/v1/worker-claims" in deployment
+    assert "POST /api/v1/worker-claims/{job_id}/renew" in deployment
     for filter_query in ("?metric=", "?category=", "?tag="):
         assert filter_query in deployment
     assert "evalforge.server:app" not in deployment

@@ -22,6 +22,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Installed one-shot worker command with an explicit absolute registry path, worker identity, bounded operational JSON, and redacted failures.
 - Supervised queue-draining worker mode with bounded polling, graceful supported console termination, redacted operational JSON, and an optional finite idle limit for deployment smokes.
 - Tenant-scoped admin worker claim API with bounded lease requests, private capability delivery, and cross-tenant queue isolation.
+- Tenant-scoped HTTP worker lease renewal with capability rotation and generic foreign, absent, stale, expired, or mismatched lease failures.
 
 ### Security
 

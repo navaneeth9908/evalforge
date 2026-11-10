@@ -92,6 +92,7 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Deployable one-shot worker command with explicit registry and worker identity
   - [x] Supervised queue-draining worker service with graceful termination and bounded idle smoke mode
   - [x] Tenant-scoped admin worker claim API with cross-tenant non-disclosure
+  - [x] Tenant-scoped HTTP lease renewal with capability rotation
   - [ ] Multi-host distribution and horizontally safe queue backend
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics

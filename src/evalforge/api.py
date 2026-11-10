@@ -29,6 +29,8 @@ from evalforge.contracts import (
 )
 from evalforge.registry import (
     ClaimedEvaluationJob,
+    EvaluationJobLeaseDurationError,
+    EvaluationJobLeaseNotFoundError,
     RunSummary,
     SQLiteRunRegistry,
     StoredEvaluationJob,
@@ -187,6 +189,27 @@ class WorkerClaimResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     job: ClaimedEvaluationJobResponse | None
+
+
+class WorkerLeaseRenewalRequest(BaseModel):
+    """Capability-authorized request to extend one active worker lease."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    worker_id: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+    lease_token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    lease_seconds: int = Field(strict=True, ge=1, le=3_600)
+
+
+class WorkerLeaseRenewalResponse(BaseModel):
+    """Rotated capability and extended deadline for one active worker lease."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    job_id: Sha256Digest
+    attempts: int = Field(ge=1, le=10)
+    lease_token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    lease_expires_at: str
 
 
 class RunSummaryResponse(BaseModel):
@@ -946,6 +969,43 @@ def create_app(
             tenant_id=principal.tenant_id,
         )
         return _worker_claim_response(claimed)
+
+    @app.post(
+        "/api/v1/worker-claims/{job_id}/renew",
+        response_model=WorkerLeaseRenewalResponse,
+        tags=["evaluation-jobs"],
+    )
+    def renew_evaluation_job_lease(
+        job_id: Sha256Digest,
+        request: WorkerLeaseRenewalRequest,
+        principal: AuthenticatedPrincipal = admin_dependency,
+    ) -> WorkerLeaseRenewalResponse:
+        try:
+            renewed = registry.renew_evaluation_job_lease(
+                job_id=job_id,
+                worker_id=request.worker_id,
+                lease_token=request.lease_token,
+                lease_seconds=request.lease_seconds,
+                tenant_id=principal.tenant_id,
+            )
+        except EvaluationJobLeaseNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="evaluation_job_lease_not_found",
+                message="evaluation job lease was not found",
+            ) from exc
+        except EvaluationJobLeaseDurationError as exc:
+            raise APIError(
+                status_code=400,
+                code="invalid_lease_extension",
+                message="lease duration must extend the active lease",
+            ) from exc
+        return WorkerLeaseRenewalResponse(
+            job_id=renewed.job_id,
+            attempts=renewed.attempts,
+            lease_token=renewed.lease_token,
+            lease_expires_at=renewed.lease_expires_at,
+        )
 
     @app.post(
         "/api/v1/evaluations",
