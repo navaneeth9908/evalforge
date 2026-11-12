@@ -1085,19 +1085,24 @@ class SQLiteRunRegistry:
         worker_id: str,
         lease_token: str,
         report: JsonValue,
+        tenant_id: str | None = None,
     ) -> StoredEvaluationJob:
-        """Atomically publish run evidence and complete one capability-owned lease."""
+        """Atomically publish run evidence, optionally constrained to one tenant."""
 
         _require_digest(job_id, label="evaluation job ID")
         _validate_worker_id(worker_id)
         _validate_lease_token(lease_token)
+        if tenant_id is not None:
+            _validate_tenant_id(tenant_id)
         token_digest = sha256(lease_token.encode("ascii")).hexdigest()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             now = _utc_now()
+            tenant_clause = "" if tenant_id is None else " AND evaluation_jobs.tenant_id = ?"
+            parameters = (job_id,) if tenant_id is None else (job_id, tenant_id)
             row = connection.execute(
-                """
+                f"""
                 SELECT evaluation_jobs.tenant_id, evaluation_jobs.status,
                        evaluation_jobs.worker_id, evaluation_jobs.lease_token_digest,
                        evaluation_jobs.lease_expires_at,
@@ -1109,9 +1114,9 @@ class SQLiteRunRegistry:
                 FROM evaluation_jobs
                 JOIN suites ON suites.id = evaluation_jobs.suite_id
                 JOIN candidates ON candidates.id = evaluation_jobs.candidate_id
-                WHERE evaluation_jobs.job_id = ?
+                WHERE evaluation_jobs.job_id = ?{tenant_clause}
                 """,
-                (job_id,),
+                parameters,
             ).fetchone()
             if (
                 row is None

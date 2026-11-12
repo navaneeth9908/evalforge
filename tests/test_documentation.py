@@ -77,6 +77,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "/dashboard/cases" in readme
     assert "POST /api/v1/worker-claims" in readme
     assert "POST /api/v1/worker-claims/{job_id}/renew" in readme
+    assert "POST /api/v1/worker-claims/{job_id}/complete" in readme
     assert "dedicated case-level drill-down remain future work" not in readme
     assert "filtered metric, category, and tag trends" in readme
 
@@ -139,6 +140,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "deployable one-shot worker command and supervised worker mode" in acceptance
     assert "tenant-scoped admin worker claim API" in acceptance
     assert "tenant-scoped HTTP lease renewal" in acceptance
+    assert "tenant-scoped HTTP successful completion" in acceptance
 
     for example in (
         "code-harness-evidence.json",
@@ -177,6 +179,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Supervised queue-draining worker service" in roadmap
     assert "- [x] Tenant-scoped admin worker claim API" in roadmap
     assert "- [x] Tenant-scoped HTTP lease renewal with capability rotation" in roadmap
+    assert "- [x] Tenant-scoped HTTP successful completion" in roadmap
     assert "- [ ] Multi-host distribution and horizontally safe queue backend" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
     assert "terminally classifies invalid evaluation input" in readme

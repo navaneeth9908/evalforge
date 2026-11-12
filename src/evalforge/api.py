@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from html import escape
 from pathlib import Path
 from typing import Annotated, Literal, cast
@@ -11,7 +12,7 @@ from fastapi import Depends, FastAPI, Header, Query, Request, Security, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from evalforge.auth import (
     TRUSTED_LOCAL_TENANT_ID,
@@ -27,6 +28,7 @@ from evalforge.contracts import (
     PersistedEvaluationReport,
     Sha256Digest,
 )
+from evalforge.provenance import JsonValue
 from evalforge.registry import (
     ClaimedEvaluationJob,
     EvaluationJobLeaseDurationError,
@@ -96,6 +98,30 @@ class APIError(Exception):
         self.code = code
         self.message = message
         self.headers = headers
+
+
+class _DuplicateJsonKeyError(ValueError):
+    """An ambiguous JSON object repeats one member name."""
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJsonKeyError
+        result[key] = value
+    return result
+
+
+def _require_unique_json_keys(body: bytes) -> None:
+    try:
+        json.loads(body, object_pairs_hook=_reject_duplicate_json_keys)
+    except _DuplicateJsonKeyError:
+        raise APIError(
+            status_code=422,
+            code="validation_error",
+            message="request validation failed",
+        ) from None
 
 
 class SuiteResponse(BaseModel):
@@ -210,6 +236,31 @@ class WorkerLeaseRenewalResponse(BaseModel):
     attempts: int = Field(ge=1, le=10)
     lease_token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
     lease_expires_at: str
+
+
+class WorkerCompletionRequest(BaseModel):
+    """Capability-authorized request to publish one completed evaluation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    worker_id: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+    lease_token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    report: dict[str, object]
+
+    @field_validator("report", mode="before")
+    @classmethod
+    def preserve_complete_strict_report(cls, value: object) -> object:
+        """Reject normalization aliases while retaining the submitted report structure."""
+
+        if type(value) is not dict:
+            raise ValueError("report must be an object")
+        validated = PersistedEvaluationReport.model_validate_json(
+            json.dumps(value, allow_nan=False, separators=(",", ":")),
+            strict=True,
+        )
+        if validated.model_fields_set != set(PersistedEvaluationReport.model_fields):
+            raise ValueError("report must explicitly provide every persisted field")
+        return value
 
 
 class RunSummaryResponse(BaseModel):
@@ -1006,6 +1057,40 @@ def create_app(
             lease_token=renewed.lease_token,
             lease_expires_at=renewed.lease_expires_at,
         )
+
+    @app.post(
+        "/api/v1/worker-claims/{job_id}/complete",
+        response_model=EvaluationJobResponse,
+        tags=["evaluation-jobs"],
+    )
+    async def complete_evaluation_job(
+        job_id: Sha256Digest,
+        request: WorkerCompletionRequest,
+        http_request: Request,
+        principal: AuthenticatedPrincipal = admin_dependency,
+    ) -> EvaluationJobResponse:
+        _require_unique_json_keys(await http_request.body())
+        try:
+            completed = registry.complete_evaluation_job(
+                job_id=job_id,
+                worker_id=request.worker_id,
+                lease_token=request.lease_token,
+                report=cast(JsonValue, request.report),
+                tenant_id=principal.tenant_id,
+            )
+        except EvaluationJobLeaseNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="evaluation_job_lease_not_found",
+                message="evaluation job lease was not found",
+            ) from exc
+        except ValueError as exc:
+            raise APIError(
+                status_code=400,
+                code="invalid_evaluation_report",
+                message="evaluation report is invalid",
+            ) from exc
+        return _evaluation_job_response(completed)
 
     @app.post(
         "/api/v1/evaluations",

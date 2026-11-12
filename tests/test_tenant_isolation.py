@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -282,6 +284,304 @@ def test_admin_worker_claim_is_tenant_scoped_and_editor_cannot_consume_jobs(
     assert beta_visible.json()["status"] == "queued"
     assert beta_visible.json()["attempts"] == 0
     assert "beta-private" not in claimed.text
+
+
+def test_admin_can_complete_http_worker_job_and_publish_run(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.service import _evaluation_report_payload
+
+    with TestClient(create_app(tmp_path / "worker-completion.db")) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-completion"),
+        ).json()["suite_id"]
+        queued = client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "remote-worker-completion-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        ).json()
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        _suite_name, report = _evaluation_report_payload(
+            suite_id=claimed["suite_id"],
+            suite_payload=claimed["suite"],
+            candidate_payload=claimed["candidate"],
+        )
+
+        completed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            json={
+                "worker_id": "remote-worker-a",
+                "lease_token": claimed["lease_token"],
+                "report": report,
+            },
+        )
+        run = client.get(f"/api/v1/runs/{report['run_id']}")
+
+    assert completed.status_code == 200
+    assert completed.json()["job_id"] == queued["job_id"]
+    assert completed.json()["status"] == "succeeded"
+    assert completed.json()["run_id"] == report["run_id"]
+    assert run.status_code == 200
+    assert run.json()["report"] == report
+
+
+def test_http_worker_completion_enforces_tenant_admin_non_disclosure(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.auth import AccessCredential
+    from evalforge.service import _evaluation_report_payload
+
+    alpha_admin_token = "completion-alpha-admin-token-00000000001"
+    alpha_editor_token = "completion-alpha-editor-token-000000001"
+    beta_admin_token = "completion-beta-admin-token-000000000001"
+    app = create_app(
+        tmp_path / "tenant-worker-completion.db",
+        access_credentials=(
+            AccessCredential(token=alpha_admin_token, tenant_id="tenant-alpha", role="admin"),
+            AccessCredential(token=alpha_editor_token, tenant_id="tenant-alpha", role="editor"),
+            AccessCredential(token=beta_admin_token, tenant_id="tenant-beta", role="admin"),
+        ),
+    )
+
+    with TestClient(app) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            headers=_authorization(alpha_admin_token),
+            json=_suite("tenant-worker-completion"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={
+                **_authorization(alpha_admin_token),
+                "Idempotency-Key": "tenant-worker-completion-0001",
+            },
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            headers=_authorization(alpha_admin_token),
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        _suite_name, report = _evaluation_report_payload(
+            suite_id=claimed["suite_id"],
+            suite_payload=claimed["suite"],
+            candidate_payload=claimed["candidate"],
+        )
+        completion_payload = {
+            "worker_id": "remote-worker-a",
+            "lease_token": claimed["lease_token"],
+            "report": report,
+        }
+
+        foreign = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            headers=_authorization(beta_admin_token),
+            json=completion_payload,
+        )
+        absent = client.post(
+            f"/api/v1/worker-claims/{'f' * 64}/complete",
+            headers=_authorization(beta_admin_token),
+            json=completion_payload,
+        )
+        forbidden = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            headers=_authorization(alpha_editor_token),
+            json=completion_payload,
+        )
+        completed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            headers=_authorization(alpha_admin_token),
+            json=completion_payload,
+        )
+
+    expected_missing = {
+        "error": {
+            "code": "evaluation_job_lease_not_found",
+            "message": "evaluation job lease was not found",
+        }
+    }
+    assert foreign.status_code == absent.status_code == 404
+    assert foreign.json() == absent.json() == expected_missing
+    assert forbidden.status_code == 403
+    assert completed.status_code == 200
+
+
+def test_http_worker_completion_rejects_forged_report_without_mutation(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.service import _evaluation_report_payload
+
+    app = create_app(tmp_path / "worker-forged-completion.db")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-forged-completion"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "remote-worker-forged-completion-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        _suite_name, report = _evaluation_report_payload(
+            suite_id=claimed["suite_id"],
+            suite_payload=claimed["suite"],
+            candidate_payload=claimed["candidate"],
+        )
+        completion_payload = {
+            "worker_id": "remote-worker-a",
+            "lease_token": claimed["lease_token"],
+            "report": report,
+        }
+        forged_payload = {
+            **completion_payload,
+            "report": {**report, "passed_cases": 0},
+        }
+
+        rejected = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            json=forged_payload,
+        )
+        still_running = client.get(f"/api/v1/evaluation-jobs/{claimed['job_id']}")
+        completed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            json=completion_payload,
+        )
+
+    assert rejected.status_code == 400
+    assert rejected.json() == {
+        "error": {
+            "code": "invalid_evaluation_report",
+            "message": "evaluation report is invalid",
+        }
+    }
+    assert still_running.json()["status"] == "running"
+    assert still_running.json()["run_id"] is None
+    assert completed.status_code == 200
+
+
+@pytest.mark.parametrize("mutation", ("coercive-count", "missing-default"))
+def test_http_worker_completion_rejects_normalized_report_aliases(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    from evalforge.api import create_app
+    from evalforge.service import _evaluation_report_payload
+
+    app = create_app(tmp_path / f"worker-normalized-completion-{mutation}.db")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-normalized-completion"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": f"remote-worker-normalized-{mutation}-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        _suite_name, report = _evaluation_report_payload(
+            suite_id=claimed["suite_id"],
+            suite_payload=claimed["suite"],
+            candidate_payload=claimed["candidate"],
+        )
+        malformed_report = dict(report)
+        if mutation == "coercive-count":
+            malformed_report["passed_cases"] = "1"
+        else:
+            malformed_report.pop("resource_gate_failures")
+        completion_payload = {
+            "worker_id": "remote-worker-a",
+            "lease_token": claimed["lease_token"],
+        }
+
+        rejected = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            json={**completion_payload, "report": malformed_report},
+        )
+        still_running = client.get(f"/api/v1/evaluation-jobs/{claimed['job_id']}")
+        completed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            json={**completion_payload, "report": report},
+        )
+
+    assert rejected.status_code == 422
+    assert rejected.json() == {
+        "error": {"code": "validation_error", "message": "request validation failed"}
+    }
+    assert still_running.json()["status"] == "running"
+    assert still_running.json()["run_id"] is None
+    assert completed.status_code == 200
+
+
+def test_http_worker_completion_rejects_duplicate_report_keys_without_mutation(
+    tmp_path: Path,
+) -> None:
+    from evalforge.api import create_app
+    from evalforge.service import _evaluation_report_payload
+
+    app = create_app(tmp_path / "worker-duplicate-completion.db")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-duplicate-completion"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "remote-worker-duplicate-completion-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        _suite_name, report = _evaluation_report_payload(
+            suite_id=claimed["suite_id"],
+            suite_payload=claimed["suite"],
+            candidate_payload=claimed["candidate"],
+        )
+        report_json = json.dumps(report, separators=(",", ":"))
+        suite_name = json.dumps(report["suite_name"])
+        ambiguous_report = report_json.replace(
+            f'"suite_name":{suite_name}',
+            f'"suite_name":"forged","suite_name":{suite_name}',
+            1,
+        )
+        request_body = (
+            '{"worker_id":"remote-worker-a","lease_token":'
+            f'{json.dumps(claimed["lease_token"])},"report":{ambiguous_report}'
+            "}"
+        )
+
+        rejected = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            content=request_body,
+            headers={"Content-Type": "application/json"},
+        )
+        still_running = client.get(f"/api/v1/evaluation-jobs/{claimed['job_id']}")
+        completed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            json={
+                "worker_id": "remote-worker-a",
+                "lease_token": claimed["lease_token"],
+                "report": report,
+            },
+        )
+
+    assert rejected.status_code == 422
+    assert rejected.json() == {
+        "error": {"code": "validation_error", "message": "request validation failed"}
+    }
+    assert still_running.json()["status"] == "running"
+    assert still_running.json()["run_id"] is None
+    assert completed.status_code == 200
 
 
 def test_admin_can_renew_http_worker_lease_with_rotated_capability(tmp_path: Path) -> None:

@@ -213,8 +213,13 @@ logging the body. `POST /api/v1/worker-claims/{job_id}/renew` is also admin-only
 matching worker ID and active lease capability. It constrains lookup to the authenticated tenant,
 returns the same generic `404` for foreign, absent, stale, expired, or mismatched capabilities, and
 atomically rotates the token while extending the deadline. A duration that would not advance the
-current deadline returns a redaction-safe `400` without rotating the capability. Remote completion,
-failure, and retry routes are not implemented yet.
+current deadline returns a redaction-safe `400` without rotating the capability.
+`POST /api/v1/worker-claims/{job_id}/complete` is admin-only and accepts the matching worker ID,
+active capability, and one strict persisted-report contract. It constrains the lease lookup to the
+authenticated tenant, re-derives the report from the stored suite and candidate, and atomically
+publishes the run membership plus succeeded job state. Foreign, absent, stale, expired, consumed, or
+mismatched capabilities share the generic lease `404`; a schema-valid forged report receives a
+redaction-safe `400` and leaves the lease unchanged. Remote failure and retry routes are not implemented.
 The registry can atomically claim the oldest available job with a bounded lease, keep only a digest
 of the capability token at rest, reclaim expired work, and stop after three claims. An active worker
 can extend its deadline only with the matching job, worker ID, and capability; renewal atomically
