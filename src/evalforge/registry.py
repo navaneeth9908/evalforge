@@ -1272,12 +1272,15 @@ class SQLiteRunRegistry:
         worker_id: str,
         lease_token: str,
         failure_code: Literal["invalid_evaluation"],
+        tenant_id: str | None = None,
     ) -> StoredEvaluationJob:
-        """Atomically fail invalid work through its active lease capability."""
+        """Fail invalid work, optionally constrained to one tenant."""
 
         _require_digest(job_id, label="evaluation job ID")
         _validate_worker_id(worker_id)
         _validate_lease_token(lease_token)
+        if tenant_id is not None:
+            _validate_tenant_id(tenant_id)
         if type(failure_code) is not str or failure_code != "invalid_evaluation":
             raise ValueError("evaluation job failure code is invalid")
         token_digest = sha256(lease_token.encode("ascii")).hexdigest()
@@ -1285,13 +1288,15 @@ class SQLiteRunRegistry:
         try:
             connection.execute("BEGIN IMMEDIATE")
             now = _utc_now()
+            tenant_clause = "" if tenant_id is None else " AND tenant_id = ?"
+            parameters = (job_id,) if tenant_id is None else (job_id, tenant_id)
             row = connection.execute(
-                """
+                f"""
                 SELECT status, worker_id, lease_token_digest, lease_expires_at
                 FROM evaluation_jobs
-                WHERE job_id = ?
+                WHERE job_id = ?{tenant_clause}
                 """,
-                (job_id,),
+                parameters,
             ).fetchone()
             if (
                 row is None

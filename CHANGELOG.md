@@ -24,6 +24,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Tenant-scoped admin worker claim API with bounded lease requests, private capability delivery, and cross-tenant queue isolation.
 - Tenant-scoped HTTP worker lease renewal with capability rotation and generic foreign, absent, stale, expired, or mismatched lease failures.
 - Tenant-scoped HTTP worker completion with strict report validation, deterministic re-derivation, atomic run publication, and generic stale or foreign capability failures.
+- Tenant-scoped HTTP terminal invalid-evaluation failure with strict duplicate-key rejection, no run publication, and generic stale or foreign capability failures.
 
 ### Security
 

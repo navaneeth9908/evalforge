@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized HTTP renewal and successful completion, and one-shot or supervised local workers with atomic successful completion, terminal invalid-input classification, or bounded transient retry scheduling. Multi-host distributed execution remains roadmap work. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized HTTP renewal, successful completion, and terminal invalid-input failure, plus one-shot or supervised local workers with atomic successful completion, terminal invalid-input classification, or bounded transient retry scheduling. Multi-host distributed execution remains roadmap work. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -117,7 +117,9 @@ tenant plus the matching worker ID, active capability, and a strict persisted-re
 server re-derives the complete report from stored immutable inputs before atomically publishing the
 tenant run membership and succeeded job state. Foreign, absent, stale, expired, consumed, or mismatched
 capabilities share the generic lease `404`; forged schema-valid reports return a generic `400` without
-mutation. HTTP failure and retry routes remain open, so this is still a bounded remote-worker slice
+mutation. `POST /api/v1/worker-claims/{job_id}/fail` accepts only the bounded
+`invalid_evaluation` code from that same tenant admin and active capability, publishes no run, rejects
+ambiguous duplicate-key JSON, and uses the same generic lease `404`. HTTP retry remains open, so this is still a bounded remote-worker slice
 rather than complete multi-host execution. A registry worker consumer can atomically claim the oldest queued or expired job
 for 1–3,600 seconds. Claims return a fresh private capability token while persisting only its digest;
 active leases exclude competing claimers, and expiry recovery stops after the third claim with

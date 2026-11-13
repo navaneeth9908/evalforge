@@ -328,6 +328,174 @@ def test_admin_can_complete_http_worker_job_and_publish_run(tmp_path: Path) -> N
     assert run.json()["report"] == report
 
 
+def test_admin_can_terminally_fail_invalid_http_worker_job(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(create_app(tmp_path / "worker-failure.db")) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-failure"),
+        ).json()["suite_id"]
+        queued = client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "remote-worker-failure-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"unexpected": "output"}},
+        ).json()
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+
+        failed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/fail",
+            json={
+                "worker_id": "remote-worker-a",
+                "lease_token": claimed["lease_token"],
+                "failure_code": "invalid_evaluation",
+            },
+        )
+        current = client.get(f"/api/v1/evaluation-jobs/{claimed['job_id']}")
+        runs = client.get("/api/v1/runs")
+
+    assert failed.status_code == 200
+    assert failed.json() == current.json()
+    assert failed.json()["job_id"] == queued["job_id"]
+    assert failed.json()["status"] == "failed"
+    assert failed.json()["attempts"] == 1
+    assert failed.json()["failure_code"] == "invalid_evaluation"
+    assert failed.json()["run_id"] is None
+    assert runs.json()["total"] == 0
+
+
+def test_http_worker_failure_enforces_tenant_admin_non_disclosure(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.auth import AccessCredential
+
+    alpha_admin_token = "failure-alpha-admin-token-000000000001"
+    alpha_editor_token = "failure-alpha-editor-token-00000000001"
+    beta_admin_token = "failure-beta-admin-token-0000000000001"
+    app = create_app(
+        tmp_path / "tenant-worker-failure.db",
+        access_credentials=(
+            AccessCredential(token=alpha_admin_token, tenant_id="tenant-alpha", role="admin"),
+            AccessCredential(token=alpha_editor_token, tenant_id="tenant-alpha", role="editor"),
+            AccessCredential(token=beta_admin_token, tenant_id="tenant-beta", role="admin"),
+        ),
+    )
+
+    with TestClient(app) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            headers=_authorization(alpha_admin_token),
+            json=_suite("tenant-worker-failure"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={
+                **_authorization(alpha_admin_token),
+                "Idempotency-Key": "tenant-worker-failure-0001",
+            },
+            json={"suite_id": suite_id, "candidate_outputs": {"unexpected": "output"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            headers=_authorization(alpha_admin_token),
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        failure_payload = {
+            "worker_id": "remote-worker-a",
+            "lease_token": claimed["lease_token"],
+            "failure_code": "invalid_evaluation",
+        }
+
+        foreign = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/fail",
+            headers=_authorization(beta_admin_token),
+            json=failure_payload,
+        )
+        absent = client.post(
+            f"/api/v1/worker-claims/{'f' * 64}/fail",
+            headers=_authorization(beta_admin_token),
+            json=failure_payload,
+        )
+        forbidden = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/fail",
+            headers=_authorization(alpha_editor_token),
+            json=failure_payload,
+        )
+        failed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/fail",
+            headers=_authorization(alpha_admin_token),
+            json=failure_payload,
+        )
+
+    expected_missing = {
+        "error": {
+            "code": "evaluation_job_lease_not_found",
+            "message": "evaluation job lease was not found",
+        }
+    }
+    assert foreign.status_code == absent.status_code == 404
+    assert foreign.json() == absent.json() == expected_missing
+    assert forbidden.status_code == 403
+    assert failed.status_code == 200
+
+
+def test_http_worker_failure_rejects_duplicate_keys_without_mutation(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(
+        create_app(tmp_path / "worker-duplicate-failure.db"),
+        raise_server_exceptions=False,
+    ) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-duplicate-failure"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "remote-worker-duplicate-failure-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"unexpected": "output"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        ambiguous_body = json.dumps(
+            {
+                "worker_id": "remote-worker-a",
+                "lease_token": claimed["lease_token"],
+                "failure_code": "invalid_evaluation",
+            },
+            separators=(",", ":"),
+        ).replace(
+            '"failure_code":"invalid_evaluation"',
+            '"failure_code":"forged","failure_code":"invalid_evaluation"',
+        )
+
+        rejected = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/fail",
+            content=ambiguous_body,
+            headers={"Content-Type": "application/json"},
+        )
+        still_running = client.get(f"/api/v1/evaluation-jobs/{claimed['job_id']}")
+        failed = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/fail",
+            json={
+                "worker_id": "remote-worker-a",
+                "lease_token": claimed["lease_token"],
+                "failure_code": "invalid_evaluation",
+            },
+        )
+
+    assert rejected.status_code == 422
+    assert rejected.json() == {
+        "error": {"code": "validation_error", "message": "request validation failed"}
+    }
+    assert still_running.json()["status"] == "running"
+    assert failed.status_code == 200
+
+
 def test_http_worker_completion_enforces_tenant_admin_non_disclosure(tmp_path: Path) -> None:
     from evalforge.api import create_app
     from evalforge.auth import AccessCredential

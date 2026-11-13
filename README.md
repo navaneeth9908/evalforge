@@ -81,6 +81,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Durable tenant-scoped asynchronous evaluation submission with idempotent queue records and status polling
 - Tenant-scoped admin worker claims over HTTP with bounded leases and cross-tenant non-disclosure
 - Tenant-scoped HTTP lease renewal with capability rotation and generic stale/foreign failures
+- Tenant-scoped HTTP terminal invalid-evaluation failure recording with generic stale/foreign failures
 - Atomic oldest-first worker leases with token-digest storage, bounded expiry recovery, and terminal attempt exhaustion
 - Capability-authorized worker lease renewal with atomic token rotation and stale-capability rejection
 - One-shot worker execution with deterministic report revalidation and atomic tenant-scoped completion
@@ -95,7 +96,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, capability-authorized lease renewal, and a one-shot `EvaluationWorker` that completes valid work, terminally classifies invalid evaluation input, or schedules an unexpected evaluation failure for a capability-authorized retry with bounded exponential backoff. The installed `evalforge-worker` command exposes both one-shot and continuously supervised queue-draining modes to deployment tooling. An authenticated tenant admin can claim that tenant's next job through `POST /api/v1/worker-claims` and rotate an active capability through `POST /api/v1/worker-claims/{job_id}/renew`; remote completion, failure, retry, and a horizontally safe queue backend remain roadmap work.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, capability-authorized lease renewal, and a one-shot `EvaluationWorker` that completes valid work, terminally classifies invalid evaluation input, or schedules an unexpected evaluation failure for a capability-authorized retry with bounded exponential backoff. The installed `evalforge-worker` command exposes both one-shot and continuously supervised queue-draining modes to deployment tooling. An authenticated tenant admin can claim that tenant's next job through `POST /api/v1/worker-claims`, rotate an active capability through `POST /api/v1/worker-claims/{job_id}/renew`, publish derived evidence through `POST /api/v1/worker-claims/{job_id}/complete`, or record bounded invalid-input failure through `POST /api/v1/worker-claims/{job_id}/fail`; remote retry and a horizontally safe queue backend remain roadmap work.
 
 ## Quick start
 
@@ -219,7 +220,10 @@ active capability, and one strict persisted-report contract. It constrains the l
 authenticated tenant, re-derives the report from the stored suite and candidate, and atomically
 publishes the run membership plus succeeded job state. Foreign, absent, stale, expired, consumed, or
 mismatched capabilities share the generic lease `404`; a schema-valid forged report receives a
-redaction-safe `400` and leaves the lease unchanged. Remote failure and retry routes are not implemented.
+redaction-safe `400` and leaves the lease unchanged. `POST /api/v1/worker-claims/{job_id}/fail`
+is admin-only, tenant-scoped, and accepts only the matching worker, active capability, and bounded
+`invalid_evaluation` classification. It rejects ambiguous duplicate-key JSON, publishes no run, and
+atomically clears lease state. Remote retry is not implemented.
 The registry can atomically claim the oldest available job with a bounded lease, keep only a digest
 of the capability token at rest, reclaim expired work, and stop after three claims. An active worker
 can extend its deadline only with the matching job, worker ID, and capability; renewal atomically

@@ -263,6 +263,16 @@ class WorkerCompletionRequest(BaseModel):
         return value
 
 
+class WorkerFailureRequest(BaseModel):
+    """Capability-authorized terminal classification for invalid evaluation work."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    worker_id: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+    lease_token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    failure_code: Literal["invalid_evaluation"]
+
+
 class RunSummaryResponse(BaseModel):
     """Compact content-addressed run history row."""
 
@@ -1091,6 +1101,34 @@ def create_app(
                 message="evaluation report is invalid",
             ) from exc
         return _evaluation_job_response(completed)
+
+    @app.post(
+        "/api/v1/worker-claims/{job_id}/fail",
+        response_model=EvaluationJobResponse,
+        tags=["evaluation-jobs"],
+    )
+    async def fail_evaluation_job(
+        job_id: Sha256Digest,
+        request: WorkerFailureRequest,
+        http_request: Request,
+        principal: AuthenticatedPrincipal = admin_dependency,
+    ) -> EvaluationJobResponse:
+        _require_unique_json_keys(await http_request.body())
+        try:
+            failed = registry.fail_evaluation_job(
+                job_id=job_id,
+                worker_id=request.worker_id,
+                lease_token=request.lease_token,
+                failure_code=request.failure_code,
+                tenant_id=principal.tenant_id,
+            )
+        except EvaluationJobLeaseNotFoundError as exc:
+            raise APIError(
+                status_code=404,
+                code="evaluation_job_lease_not_found",
+                message="evaluation job lease was not found",
+            ) from exc
+        return _evaluation_job_response(failed)
 
     @app.post(
         "/api/v1/evaluations",
