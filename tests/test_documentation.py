@@ -79,6 +79,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "POST /api/v1/worker-claims/{job_id}/renew" in readme
     assert "POST /api/v1/worker-claims/{job_id}/complete" in readme
     assert "POST /api/v1/worker-claims/{job_id}/fail" in readme
+    assert "POST /api/v1/worker-claims/{job_id}/retry" in readme
+    assert "remote retry is not implemented" not in readme.lower()
     assert "Remote failure and retry routes are not implemented" not in readme
     assert "dedicated case-level drill-down remain future work" not in readme
     assert "filtered metric, category, and tag trends" in readme
@@ -144,6 +146,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "tenant-scoped HTTP lease renewal" in acceptance
     assert "tenant-scoped HTTP successful completion" in acceptance
     assert "tenant-scoped HTTP terminal invalid-evaluation failure" in acceptance
+    assert "tenant-scoped HTTP transient retry" in acceptance
 
     for example in (
         "code-harness-evidence.json",
@@ -184,6 +187,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Tenant-scoped HTTP lease renewal with capability rotation" in roadmap
     assert "- [x] Tenant-scoped HTTP successful completion" in roadmap
     assert "- [x] Tenant-scoped HTTP terminal invalid-evaluation failure recording" in roadmap
+    assert "- [x] Tenant-scoped HTTP transient retry scheduling" in roadmap
     assert "- [ ] Multi-host distribution and horizontally safe queue backend" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
     assert "terminally classifies invalid evaluation input" in readme
@@ -203,6 +207,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "POST /api/v1/worker-claims" in deployment
     assert "POST /api/v1/worker-claims/{job_id}/renew" in deployment
     assert "POST /api/v1/worker-claims/{job_id}/fail" in deployment
+    assert "POST /api/v1/worker-claims/{job_id}/retry" in deployment
+    assert "HTTP retry remains open" not in deployment
     for filter_query in ("?metric=", "?category=", "?tag="):
         assert filter_query in deployment
     assert "evalforge.server:app" not in deployment

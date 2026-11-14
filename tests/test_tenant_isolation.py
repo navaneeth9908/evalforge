@@ -367,6 +367,186 @@ def test_admin_can_terminally_fail_invalid_http_worker_job(tmp_path: Path) -> No
     assert runs.json()["total"] == 0
 
 
+def test_admin_can_retry_http_worker_job_with_bounded_backoff(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(create_app(tmp_path / "worker-retry.db")) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-retry"),
+        ).json()["suite_id"]
+        queued = client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "remote-worker-retry-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        ).json()
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+
+        retrying = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/retry",
+            json={
+                "worker_id": "remote-worker-a",
+                "lease_token": claimed["lease_token"],
+                "backoff_seconds": 3_600,
+            },
+        )
+        unavailable = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-b", "lease_seconds": 30},
+        )
+
+    assert retrying.status_code == 200
+    assert retrying.json()["job_id"] == queued["job_id"]
+    assert retrying.json()["status"] == "queued"
+    assert retrying.json()["attempts"] == 1
+    assert retrying.json()["failure_code"] is None
+    assert retrying.json()["run_id"] is None
+    assert unavailable.status_code == 200
+    assert unavailable.json() == {"job": None}
+
+
+def test_http_worker_retry_enforces_tenant_admin_non_disclosure(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.auth import AccessCredential
+
+    alpha_admin_token = "retry-alpha-admin-token-00000000000001"
+    alpha_editor_token = "retry-alpha-editor-token-0000000000001"
+    beta_admin_token = "retry-beta-admin-token-000000000000001"
+    app = create_app(
+        tmp_path / "tenant-worker-retry.db",
+        access_credentials=(
+            AccessCredential(token=alpha_admin_token, tenant_id="tenant-alpha", role="admin"),
+            AccessCredential(token=alpha_editor_token, tenant_id="tenant-alpha", role="editor"),
+            AccessCredential(token=beta_admin_token, tenant_id="tenant-beta", role="admin"),
+        ),
+    )
+
+    with TestClient(app) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            headers=_authorization(alpha_admin_token),
+            json=_suite("tenant-worker-retry"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={
+                **_authorization(alpha_admin_token),
+                "Idempotency-Key": "tenant-worker-retry-0001",
+            },
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            headers=_authorization(alpha_admin_token),
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        retry_payload = {
+            "worker_id": "remote-worker-a",
+            "lease_token": claimed["lease_token"],
+            "backoff_seconds": 60,
+        }
+
+        foreign = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/retry",
+            headers=_authorization(beta_admin_token),
+            json=retry_payload,
+        )
+        absent = client.post(
+            f"/api/v1/worker-claims/{'f' * 64}/retry",
+            headers=_authorization(beta_admin_token),
+            json=retry_payload,
+        )
+        forbidden = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/retry",
+            headers=_authorization(alpha_editor_token),
+            json=retry_payload,
+        )
+        retrying = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/retry",
+            headers=_authorization(alpha_admin_token),
+            json=retry_payload,
+        )
+
+    expected_missing = {
+        "error": {
+            "code": "evaluation_job_lease_not_found",
+            "message": "evaluation job lease was not found",
+        }
+    }
+    assert foreign.status_code == absent.status_code == 404
+    assert foreign.json() == absent.json() == expected_missing
+    assert forbidden.status_code == 403
+    assert retrying.status_code == 200
+    assert retrying.json()["status"] == "queued"
+
+
+def test_http_worker_retry_rejects_duplicate_keys_without_mutation(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(
+        create_app(tmp_path / "worker-duplicate-retry.db"),
+        raise_server_exceptions=False,
+    ) as client:
+        suite_id = client.post(
+            "/api/v1/suites",
+            json=_suite("remote-worker-duplicate-retry"),
+        ).json()["suite_id"]
+        client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "remote-worker-duplicate-retry-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        )
+        claimed = client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "remote-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        ambiguous_body = json.dumps(
+            {
+                "worker_id": "remote-worker-a",
+                "lease_token": claimed["lease_token"],
+                "backoff_seconds": 60,
+            },
+            separators=(",", ":"),
+        ).replace('"backoff_seconds":60', '"backoff_seconds":1,"backoff_seconds":60')
+
+        rejected = client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/retry",
+            content=ambiguous_body,
+            headers={"Content-Type": "application/json"},
+        )
+        still_running = client.get(f"/api/v1/evaluation-jobs/{claimed['job_id']}")
+
+    assert rejected.status_code == 422
+    assert rejected.json() == {
+        "error": {"code": "validation_error", "message": "request validation failed"}
+    }
+    assert still_running.json()["status"] == "running"
+
+
+def test_http_worker_retry_rejects_coercive_backoff_durations(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+
+    with TestClient(create_app(tmp_path / "strict-worker-retry.db")) as client:
+        responses = [
+            client.post(
+                f"/api/v1/worker-claims/{'f' * 64}/retry",
+                json={
+                    "worker_id": "strict-worker",
+                    "lease_token": "a" * 43,
+                    "backoff_seconds": value,
+                },
+            )
+            for value in (True, 1.0, "1")
+        ]
+
+    expected = {"error": {"code": "validation_error", "message": "request validation failed"}}
+    assert all(response.status_code == 422 for response in responses)
+    assert all(response.json() == expected for response in responses)
+
+
 def test_http_worker_failure_enforces_tenant_admin_non_disclosure(tmp_path: Path) -> None:
     from evalforge.api import create_app
     from evalforge.auth import AccessCredential

@@ -25,6 +25,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Tenant-scoped HTTP worker lease renewal with capability rotation and generic foreign, absent, stale, expired, or mismatched lease failures.
 - Tenant-scoped HTTP worker completion with strict report validation, deterministic re-derivation, atomic run publication, and generic stale or foreign capability failures.
 - Tenant-scoped HTTP terminal invalid-evaluation failure with strict duplicate-key rejection, no run publication, and generic stale or foreign capability failures.
+- Tenant-scoped HTTP transient retry scheduling with strict bounded backoff, duplicate-key rejection, and generic stale or foreign capability failures.
 
 ### Security
 

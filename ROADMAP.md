@@ -95,6 +95,7 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Tenant-scoped HTTP lease renewal with capability rotation
   - [x] Tenant-scoped HTTP successful completion with derived-report revalidation
   - [x] Tenant-scoped HTTP terminal invalid-evaluation failure recording
+  - [x] Tenant-scoped HTTP transient retry scheduling with bounded backoff
   - [ ] Multi-host distribution and horizontally safe queue backend
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics

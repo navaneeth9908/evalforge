@@ -1011,12 +1011,15 @@ class SQLiteRunRegistry:
         worker_id: str,
         lease_token: str,
         backoff_seconds: int,
+        tenant_id: str | None = None,
     ) -> StoredEvaluationJob:
-        """Requeue one transient failure after a capability-authorized delay."""
+        """Requeue a transient failure, optionally constrained to one tenant."""
 
         _require_digest(job_id, label="evaluation job ID")
         _validate_worker_id(worker_id)
         _validate_lease_token(lease_token)
+        if tenant_id is not None:
+            _validate_tenant_id(tenant_id)
         if type(backoff_seconds) is not int or not 1 <= backoff_seconds <= 3_600:
             raise ValueError("retry backoff must be an integer from 1 through 3600 seconds")
         token_digest = sha256(lease_token.encode("ascii")).hexdigest()
@@ -1024,14 +1027,16 @@ class SQLiteRunRegistry:
         try:
             connection.execute("BEGIN IMMEDIATE")
             now = _utc_now()
+            tenant_clause = "" if tenant_id is None else " AND tenant_id = ?"
+            parameters = (job_id,) if tenant_id is None else (job_id, tenant_id)
             row = connection.execute(
-                """
+                f"""
                 SELECT status, attempts, max_attempts, worker_id,
                        lease_token_digest, lease_expires_at
                 FROM evaluation_jobs
-                WHERE job_id = ?
+                WHERE job_id = ?{tenant_clause}
                 """,
-                (job_id,),
+                parameters,
             ).fetchone()
             if (
                 row is None
