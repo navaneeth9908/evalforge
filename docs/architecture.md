@@ -102,6 +102,13 @@ backoff from the active worker capability, rejects duplicate-key JSON, clears le
 and either returns the job to its tenant queue or records terminal attempt exhaustion. Foreign,
 absent, stale, expired, consumed, and mismatched capabilities share one generic not-found response.
 
+The installed `evalforge-remote-worker` command uses those authenticated claim, completion, failure,
+and retry boundaries to process one job without database access. It requires HTTPS except for exact
+loopback hosts, reads the tenant-admin token only from the environment, caps every response at 1 MiB,
+rejects duplicate keys and schema drift, and emits only bounded operational status. This enables a
+worker process on another host, but the central SQLite registry is still a single-node queue and does
+not satisfy the horizontally safe backend, autoscaling, or high-availability roadmap commitment.
+
 ## Control-plane direction
 
 ```mermaid

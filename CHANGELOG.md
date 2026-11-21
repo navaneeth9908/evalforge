@@ -26,6 +26,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Tenant-scoped HTTP worker completion with strict report validation, deterministic re-derivation, atomic run publication, and generic stale or foreign capability failures.
 - Tenant-scoped HTTP terminal invalid-evaluation failure with strict duplicate-key rejection, no run publication, and generic stale or foreign capability failures.
 - Tenant-scoped HTTP transient retry scheduling with strict bounded backoff, duplicate-key rejection, and generic stale or foreign capability failures.
+- Installed authenticated remote worker command with TLS-by-default API access, strict bounded responses, local evaluation, and capability-authorized completion, failure, or retry publication.
 
 ### Security
 

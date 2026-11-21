@@ -23,6 +23,7 @@ dependencies = [
 evalforge = "evalforge.cli:app"
 evalforge-smoke = "evalforge.deployment_smoke:main"
 evalforge-worker = "evalforge.worker_service:main"
+evalforge-remote-worker = "evalforge.remote_worker_service:main"
 
 [dependency-groups]
 dev = [

@@ -170,6 +170,22 @@ and `service_stopped`.
 `--max-idle-polls N` provides a finite drain/smoke mode and is rejected with `--once`. Multiple local
 processes still rely on SQLite lease serialization; this is not a horizontally safe multi-host queue.
 
+For one authenticated API-backed claim from another process or host, configure the API origin and an
+admin bearer token in the environment, then run the remote command:
+
+```bash
+EVALFORGE_WORKER_API_URL='https://evalforge.example.internal' \
+EVALFORGE_WORKER_ACCESS_TOKEN='replace-with-an-admin-token' \
+evalforge-remote-worker --worker-id worker-host-b
+```
+
+The token is consumed from the worker process environment and is never accepted on the command line.
+The API URL must use HTTPS; plain HTTP is allowed only for exact `localhost`, `127.0.0.1`, or `::1`
+development origins. Each response is capped at 1 MiB and must satisfy the strict duplicate-key-free
+API contract. The command evaluates one claim, publishes completion, `invalid_evaluation`, or a bounded
+exponential retry, prints only job ID/status/attempt metadata, and exits. It does not supervise a remote
+fleet, autoscale workers, or make the central SQLite queue horizontally safe.
+
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 
 ## Production boundary
