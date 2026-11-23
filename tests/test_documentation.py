@@ -141,7 +141,10 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "durable tenant-scoped asynchronous evaluation jobs" in acceptance
     assert "capability-authorized one-shot worker execution" in acceptance
     assert "tests/test_worker.py" in acceptance
-    assert "deployable one-shot worker command and supervised worker mode" in acceptance
+    assert (
+        "deployable one-shot worker commands and supervised local and authenticated remote "
+        "worker modes" in acceptance
+    )
     assert "tenant-scoped admin worker claim API" in acceptance
     assert "tenant-scoped HTTP lease renewal" in acceptance
     assert "tenant-scoped HTTP successful completion" in acceptance

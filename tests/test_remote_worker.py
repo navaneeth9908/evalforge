@@ -371,6 +371,131 @@ def test_remote_worker_command_consumes_environment_token_and_reports_bounded_st
     assert token not in captured.out
 
 
+def test_remote_worker_service_drains_jobs_until_bounded_idle_limit(
+    monkeypatch: object, capsys: object
+) -> None:
+    import os
+
+    from evalforge.api import EvaluationJobResponse
+    from evalforge.remote_worker import RemoteEvaluationWorker
+    from evalforge.remote_worker_service import main
+
+    token = "remote-worker-service-token-00000000000001"
+    monkeypatch.setenv("EVALFORGE_WORKER_API_URL", "https://api.example.test")  # type: ignore[attr-defined]
+    monkeypatch.setenv("EVALFORGE_WORKER_ACCESS_TOKEN", token)  # type: ignore[attr-defined]
+    completed = [
+        EvaluationJobResponse(
+            job_id=job_id * 64,
+            status="succeeded",
+            attempts=1,
+            max_attempts=3,
+            run_id=("c" if job_id == "a" else "d") * 64,
+            failure_code=None,
+            submitted_at="2099-01-01T00:00:00.000000Z",
+            updated_at="2099-01-01T00:00:01.000000Z",
+        )
+        for job_id in ("a", "b")
+    ]
+    outcomes = iter((*completed, None))
+    monkeypatch.setattr(RemoteEvaluationWorker, "run_once", lambda _worker: next(outcomes))  # type: ignore[attr-defined]
+
+    exit_code = main(
+        [
+            "--worker-id",
+            "remote-worker-a",
+            "--serve",
+            "--max-idle-polls",
+            "1",
+        ]
+    )
+
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    output = [json.loads(line) for line in captured.out.splitlines()]
+    assert exit_code == 0
+    assert captured.err == ""
+    assert output[0] == {"service_started": True}
+    assert [entry["job_id"] for entry in output[1:-1]] == ["a" * 64, "b" * 64]
+    assert output[-1] == {"processed_jobs": 2, "service_stopped": "idle_limit"}
+    assert "EVALFORGE_WORKER_ACCESS_TOKEN" not in os.environ
+    assert token not in captured.out
+
+
+def test_remote_worker_service_rejects_unbounded_poll_interval_before_consuming_token(
+    monkeypatch: object,
+) -> None:
+    import os
+
+    import pytest
+
+    from evalforge.remote_worker_service import main
+
+    token = "remote-worker-service-token-00000000000002"
+    monkeypatch.setenv("EVALFORGE_WORKER_API_URL", "https://api.example.test")  # type: ignore[attr-defined]
+    monkeypatch.setenv("EVALFORGE_WORKER_ACCESS_TOKEN", token)  # type: ignore[attr-defined]
+
+    with pytest.raises(SystemExit) as rejected:
+        main(
+            [
+                "--worker-id",
+                "remote-worker-a",
+                "--serve",
+                "--poll-interval-seconds",
+                "0",
+            ]
+        )
+
+    assert rejected.value.code == 2
+    assert os.environ["EVALFORGE_WORKER_ACCESS_TOKEN"] == token
+
+
+def test_remote_worker_service_rejects_unbounded_idle_limit_before_consuming_token(
+    monkeypatch: object,
+) -> None:
+    import os
+
+    import pytest
+
+    from evalforge.remote_worker_service import main
+
+    token = "remote-worker-service-token-00000000000003"
+    monkeypatch.setenv("EVALFORGE_WORKER_API_URL", "https://api.example.test")  # type: ignore[attr-defined]
+    monkeypatch.setenv("EVALFORGE_WORKER_ACCESS_TOKEN", token)  # type: ignore[attr-defined]
+
+    with pytest.raises(SystemExit) as rejected:
+        main(
+            [
+                "--worker-id",
+                "remote-worker-a",
+                "--serve",
+                "--max-idle-polls",
+                "0",
+            ]
+        )
+
+    assert rejected.value.code == 2
+    assert os.environ["EVALFORGE_WORKER_ACCESS_TOKEN"] == token
+
+
+def test_remote_worker_one_shot_rejects_service_poll_controls_before_consuming_token(
+    monkeypatch: object,
+) -> None:
+    import os
+
+    import pytest
+
+    from evalforge.remote_worker_service import main
+
+    token = "remote-worker-service-token-00000000000004"
+    monkeypatch.setenv("EVALFORGE_WORKER_API_URL", "https://api.example.test")  # type: ignore[attr-defined]
+    monkeypatch.setenv("EVALFORGE_WORKER_ACCESS_TOKEN", token)  # type: ignore[attr-defined]
+
+    with pytest.raises(SystemExit) as rejected:
+        main(["--worker-id", "remote-worker-a", "--max-idle-polls", "1"])
+
+    assert rejected.value.code == 2
+    assert os.environ["EVALFORGE_WORKER_ACCESS_TOKEN"] == token
+
+
 def test_remote_worker_rejects_ambiguous_or_unbounded_claim_responses() -> None:
     import pytest
 

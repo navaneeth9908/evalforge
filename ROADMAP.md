@@ -97,6 +97,7 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Tenant-scoped HTTP terminal invalid-evaluation failure recording
   - [x] Tenant-scoped HTTP transient retry scheduling with bounded backoff
   - [x] Authenticated one-shot remote worker command with bounded fail-closed HTTP contracts
+  - [x] Supervised authenticated remote worker service with graceful termination and bounded idle smoke mode
   - [ ] Multi-host distribution and horizontally safe queue backend
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics

@@ -91,6 +91,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Installed `evalforge-worker` one-shot command with explicit absolute registry path, worker identity, and redacted JSON status
 - Installed `evalforge-remote-worker` one-shot command for authenticated API claims with TLS-by-default transport and bounded redacted status
 - Supervised `evalforge-worker --serve` mode with bounded polling, graceful termination, and finite idle-drain smokes
+- Supervised `evalforge-remote-worker --serve` mode with bounded polling, graceful termination, and finite idle-drain smokes
 - Credential-free synthetic end-to-end demo spanning a provider fake, metrics, persistence, API, dashboard, JUnit, and SARIF
 - Non-root container image, loopback-only Compose deployment, and bounded health smoke
 - Bounded JSON decoding with duplicate-key, Unicode, size, depth, and string limits
@@ -98,7 +99,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Friendly validation for malformed candidate-output JSON
 - Fully offline example workflow
 
-The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, capability-authorized lease renewal, and a one-shot `EvaluationWorker` that completes valid work, terminally classifies invalid evaluation input, or schedules an unexpected evaluation failure for a capability-authorized retry with bounded exponential backoff. An authenticated remote worker applies the same outcomes through the tenant-admin HTTP API. The installed `evalforge-worker` command exposes one-shot and continuously supervised local queue-draining modes, while `evalforge-remote-worker` processes one tenant-admin API claim without direct database access. An authenticated tenant admin can claim that tenant's next job through `POST /api/v1/worker-claims`, rotate an active capability through `POST /api/v1/worker-claims/{job_id}/renew`, publish derived evidence through `POST /api/v1/worker-claims/{job_id}/complete`, record bounded invalid-input failure through `POST /api/v1/worker-claims/{job_id}/fail`, or schedule a bounded transient retry through `POST /api/v1/worker-claims/{job_id}/retry`; a horizontally safe queue backend and supervised remote fleet remain roadmap work.
+The release scope and later platform work are tracked in [ROADMAP.md](ROADMAP.md). The local API and full tenant-scoped analytics dashboard are implemented: pairwise regressions, compatible unique-run history, filtered metric/category/tag trends, and dedicated redacted case evidence. Current development builds also include opt-in authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker leases, capability-authorized lease renewal, and a one-shot `EvaluationWorker` that completes valid work, terminally classifies invalid evaluation input, or schedules an unexpected evaluation failure for a capability-authorized retry with bounded exponential backoff. An authenticated remote worker applies the same outcomes through the tenant-admin HTTP API. The installed `evalforge-worker` command exposes one-shot and continuously supervised local queue-draining modes, while `evalforge-remote-worker` provides one-shot and supervised authenticated API-backed modes without direct database access. An authenticated tenant admin can claim that tenant's next job through `POST /api/v1/worker-claims`, rotate an active capability through `POST /api/v1/worker-claims/{job_id}/renew`, publish derived evidence through `POST /api/v1/worker-claims/{job_id}/complete`, record bounded invalid-input failure through `POST /api/v1/worker-claims/{job_id}/fail`, or schedule a bounded transient retry through `POST /api/v1/worker-claims/{job_id}/retry`; a horizontally safe queue backend, fleet orchestration, autoscaling, and high availability remain roadmap work.
 
 ## Quick start
 
@@ -230,9 +231,12 @@ tenant-scoped, requires the matching worker and active capability, and accepts a
 backoff. It rejects duplicate-key JSON, clears the lease capability, and either requeues the job or
 records `attempt_limit_exhausted` on the final attempt. `evalforge-remote-worker` consumes an admin token
 from `EVALFORGE_WORKER_ACCESS_TOKEN`, claims from `EVALFORGE_WORKER_API_URL`, evaluates locally, and
-publishes one completion, terminal invalid-input failure, or bounded retry. It requires HTTPS except for
-exact loopback hosts and never prints the token, lease capability, suite, candidate, report, or exception.
-Multi-host queue coordination is not implemented.
+publishes completion, terminal invalid-input failure, or bounded retry. Its default one-shot mode makes
+one claim attempt; `--serve` continuously drains ready API work with a 1–60 second poll interval,
+graceful supported-console termination, and an optional bounded `--max-idle-polls` smoke limit. It
+requires HTTPS except for exact loopback hosts and never prints the token, lease capability, suite,
+candidate, report, or exception. Multi-host queue coordination and fleet orchestration are not
+implemented.
 The registry can atomically claim the oldest available job with a bounded lease, keep only a digest
 of the capability token at rest, reclaim expired work, and stop after three claims. An active worker
 can extend its deadline only with the matching job, worker ID, and capability; renewal atomically

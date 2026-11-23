@@ -1,6 +1,6 @@
 # Deployment guide
 
-EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized HTTP renewal, successful completion, terminal invalid-input failure, and bounded transient retry, plus one-shot or supervised local workers with atomic successful completion, terminal invalid-input classification, or bounded transient retry scheduling. Multi-host distributed execution remains roadmap work. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
+EvalForge v0.2.0 supports a single-process local/private deployment without built-in access control. Current development builds add opt-in bearer authentication, role authorization, tenant-scoped resources, durable asynchronous evaluation submission/status polling, atomic expiring worker claims, capability-authorized HTTP renewal, successful completion, terminal invalid-input failure, and bounded transient retry, plus one-shot or supervised local and authenticated remote workers with atomic successful completion, terminal invalid-input classification, or bounded transient retry scheduling. A horizontally safe queue, fleet orchestration, autoscaling, and high availability remain roadmap work. TLS, credential lifecycle management, encrypted storage, and distributed scheduling remain external or incomplete. Read the [threat model](threat-model.md) before exposing any endpoint beyond loopback.
 
 ## Local server
 
@@ -182,9 +182,13 @@ evalforge-remote-worker --worker-id worker-host-b
 The token is consumed from the worker process environment and is never accepted on the command line.
 The API URL must use HTTPS; plain HTTP is allowed only for exact `localhost`, `127.0.0.1`, or `::1`
 development origins. Each response is capped at 1 MiB and must satisfy the strict duplicate-key-free
-API contract. The command evaluates one claim, publishes completion, `invalid_evaluation`, or a bounded
-exponential retry, prints only job ID/status/attempt metadata, and exits. It does not supervise a remote
-fleet, autoscale workers, or make the central SQLite queue horizontally safe.
+API contract. The default command evaluates one claim, publishes completion, `invalid_evaluation`, or
+one bounded exponential retry, prints only job ID/status/attempt metadata, and exits. Add `--serve`
+to continuously drain ready API work with an optional 1–60 second `--poll-interval-seconds`;
+supported console signals stop after the active attempt. `--max-idle-polls N` provides a finite
+deployment smoke and is rejected without `--serve`. Service output contains only a startup marker,
+bounded per-job metadata, and a final processed count/stop reason. This mode does not orchestrate a
+remote fleet, autoscale workers, or make the central SQLite queue horizontally safe.
 
 Provider generation is a separate CLI path. Its environment variables are documented in the [README](../README.md); the service does not require provider credentials for evaluation or the synthetic acceptance demo.
 

@@ -103,11 +103,13 @@ and either returns the job to its tenant queue or records terminal attempt exhau
 absent, stale, expired, consumed, and mismatched capabilities share one generic not-found response.
 
 The installed `evalforge-remote-worker` command uses those authenticated claim, completion, failure,
-and retry boundaries to process one job without database access. It requires HTTPS except for exact
-loopback hosts, reads the tenant-admin token only from the environment, caps every response at 1 MiB,
-rejects duplicate keys and schema drift, and emits only bounded operational status. This enables a
-worker process on another host, but the central SQLite registry is still a single-node queue and does
-not satisfy the horizontally safe backend, autoscaling, or high-availability roadmap commitment.
+and retry boundaries without database access. It provides one-shot and supervised service modes; the
+service bounds polling, supports graceful console termination, and provides a finite idle-drain smoke
+limit. It requires HTTPS except for exact loopback hosts, reads the tenant-admin token only from the
+environment, caps every response at 1 MiB, rejects duplicate keys and schema drift, and emits only
+bounded operational status. This enables worker processes on other hosts, but the central SQLite
+registry is still a single-node queue and the repository does not provide fleet orchestration,
+autoscaling, a horizontally safe backend, or high availability.
 
 ## Control-plane direction
 
