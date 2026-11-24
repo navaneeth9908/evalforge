@@ -192,6 +192,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Tenant-scoped HTTP terminal invalid-evaluation failure recording" in roadmap
     assert "- [x] Tenant-scoped HTTP transient retry scheduling" in roadmap
     assert "- [ ] Multi-host distribution and horizontally safe queue backend" in roadmap
+    assert "- [x] Explicit shared-registry injection" in roadmap
+    assert "- [ ] Transactional multi-host registry implementation" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
     assert "terminally classifies invalid evaluation input" in readme
     assert "bounded exponential backoff" in readme
@@ -217,6 +219,8 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "evalforge.server:app" not in deployment
     assert "--url " not in deployment
     assert "signal handling is tested" not in deployment
+    assert "create_app(registry=existing_registry)" in deployment
+    assert "not a horizontally safe" in deployment
 
     threat_model = (ROOT / "docs" / "threat-model.md").read_text(encoding="utf-8")
     assert "API body limit" not in threat_model

@@ -111,6 +111,14 @@ bounded operational status. This enables worker processes on other hosts, but th
 registry is still a single-node queue and the repository does not provide fleet orchestration,
 autoscaling, a horizontally safe backend, or high availability.
 
+The ASGI factory accepts exactly one registry source: a SQLite database path for normal deployment or
+an already-created `SQLiteRunRegistry` for embedded composition. Cross-instance contract evidence
+submits through one independently constructed application, claims and atomically completes through a
+second, then reads the succeeded job and immutable report through the first. Keeping the complete
+registry transaction behind this injection seam avoids a claim-only adapter that could split job state
+from run/report publication. The current injected implementation is still SQLite and does not establish
+multi-process, multi-host, or high-availability safety.
+
 ## Control-plane direction
 
 ```mermaid

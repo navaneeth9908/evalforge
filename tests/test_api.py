@@ -34,6 +34,65 @@ def test_health_endpoint_reports_versioned_service_readiness(tmp_path: Path) -> 
     }
 
 
+def test_shared_registry_supports_cross_instance_worker_completion(tmp_path: Path) -> None:
+    from evalforge.api import create_app
+    from evalforge.registry import SQLiteRunRegistry
+    from evalforge.service import _evaluation_report_payload
+
+    registry = SQLiteRunRegistry(tmp_path / "shared-control-plane.db")
+    submit_app = create_app(registry=registry)
+    worker_app = create_app(registry=registry)
+
+    with TestClient(submit_app) as submit_client, TestClient(worker_app) as worker_client:
+        suite_id = submit_client.post(
+            "/api/v1/suites",
+            json=_suite("shared-control-plane"),
+        ).json()["suite_id"]
+        queued = submit_client.post(
+            "/api/v1/evaluation-jobs",
+            headers={"Idempotency-Key": "shared-control-plane-job-0001"},
+            json={"suite_id": suite_id, "candidate_outputs": {"policy": "Allowed"}},
+        ).json()
+        claimed = worker_client.post(
+            "/api/v1/worker-claims",
+            json={"worker_id": "replica-worker-a", "lease_seconds": 30},
+        ).json()["job"]
+        _suite_name, report = _evaluation_report_payload(
+            suite_id=claimed["suite_id"],
+            suite_payload=claimed["suite"],
+            candidate_payload=claimed["candidate"],
+        )
+        completed = worker_client.post(
+            f"/api/v1/worker-claims/{claimed['job_id']}/complete",
+            json={
+                "worker_id": "replica-worker-a",
+                "lease_token": claimed["lease_token"],
+                "report": report,
+            },
+        )
+        observed = submit_client.get(f"/api/v1/evaluation-jobs/{queued['job_id']}")
+        run = submit_client.get(f"/api/v1/runs/{report['run_id']}")
+
+    assert completed.status_code == 200
+    assert observed.json()["status"] == "succeeded"
+    assert observed.json()["run_id"] == report["run_id"]
+    assert run.status_code == 200
+    assert run.json()["report"] == report
+
+
+def test_create_app_rejects_ambiguous_registry_configuration(tmp_path: Path) -> None:
+    import pytest
+
+    from evalforge.api import create_app
+    from evalforge.registry import SQLiteRunRegistry
+
+    database_path = tmp_path / "ambiguous-control-plane.db"
+    with pytest.raises(ValueError, match="exactly one registry source is required") as error:
+        create_app(database_path, registry=SQLiteRunRegistry(database_path))
+
+    assert str(database_path) not in str(error.value)
+
+
 def test_suite_endpoints_store_and_page_versioned_contracts(tmp_path: Path) -> None:
     from evalforge.api import create_app
 

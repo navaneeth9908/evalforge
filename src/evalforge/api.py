@@ -723,14 +723,19 @@ def _secure_dashboard_response(content: str) -> HTMLResponse:
 
 
 def create_app(
-    database_path: Path,
+    database_path: Path | None = None,
     *,
+    registry: SQLiteRunRegistry | None = None,
     access_credentials: tuple[AccessCredential, ...] | None = None,
     access_authenticator: BearerAuthenticator | None = None,
 ) -> FastAPI:
     """Create an isolated API with optional fail-closed bearer access control."""
 
-    registry = SQLiteRunRegistry(database_path)
+    if (database_path is None) == (registry is None):
+        raise ValueError("exactly one registry source is required")
+    if registry is None:
+        assert database_path is not None
+        registry = SQLiteRunRegistry(database_path)
     service = EvalForgeService(registry)
     authenticator = access_authenticator
     if authenticator is None and access_credentials is not None:

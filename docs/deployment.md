@@ -14,6 +14,14 @@ uv run --frozen uvicorn --factory evalforge.server:create_app_from_environment \
   --host 127.0.0.1 --port 8000
 ```
 
+The environment factory intentionally creates its SQLite registry from
+`EVALFORGE_DATABASE_PATH`. Embedded Python compositions may instead call
+`create_app(registry=existing_registry)` and must omit `database_path`; supplying both or neither
+fails before application construction. This supports independently constructed ASGI applications over
+one transactional registry boundary for contract testing and embedding. It is not a horizontally safe
+SQLite deployment pattern, and a shared filesystem or network-mounted SQLite file is not supported as
+a substitute for a transactional multi-host backend.
+
 Verify health and the dashboard from another shell:
 
 ```bash

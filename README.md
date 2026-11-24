@@ -203,6 +203,12 @@ from evalforge.api import create_app
 app = create_app(Path("artifacts/evalforge.db"))
 ```
 
+Embedded control-plane compositions can instead inject one already-created
+`SQLiteRunRegistry` with `create_app(registry=registry)`; the factory requires exactly one of
+`database_path` or `registry`. Independently constructed ASGI applications can therefore share the
+same transactional registry boundary without splitting job completion from run/report publication.
+This composition seam does not make SQLite a horizontally safe or multi-host backend.
+
 The versioned `/api/v1` surface provides health, suite creation/listing, synchronous evaluation,
 durable `POST /api/v1/evaluation-jobs` submission, tenant-scoped job polling, run history, and
 immutable report retrieval. Job submission requires a 16–128 character visible-ASCII
