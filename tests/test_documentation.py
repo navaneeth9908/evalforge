@@ -193,6 +193,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [x] Tenant-scoped HTTP transient retry scheduling" in roadmap
     assert "- [ ] Multi-host distribution and horizontally safe queue backend" in roadmap
     assert "- [x] Explicit shared-registry injection" in roadmap
+    assert "- [x] Backend-neutral transactional registry port" in roadmap
     assert "- [ ] Transactional multi-host registry implementation" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
     assert "terminally classifies invalid evaluation input" in readme

@@ -29,6 +29,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Installed authenticated remote worker command with TLS-by-default API access, strict bounded responses, local evaluation, and capability-authorized completion, failure, or retry publication.
 - Supervised authenticated remote worker mode with bounded polling, graceful supported-console termination, finite idle-drain smokes, and redacted operational JSON.
 - Explicit shared-registry API composition with fail-closed source selection and cross-instance worker lifecycle evidence.
+- Backend-neutral transactional registry typing plus fail-closed health and deployment-smoke evidence for storage backend identity and multi-host safety.
 
 ### Security
 

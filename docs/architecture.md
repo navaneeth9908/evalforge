@@ -112,12 +112,16 @@ registry is still a single-node queue and the repository does not provide fleet 
 autoscaling, a horizontally safe backend, or high availability.
 
 The ASGI factory accepts exactly one registry source: a SQLite database path for normal deployment or
-an already-created `SQLiteRunRegistry` for embedded composition. Cross-instance contract evidence
+an already-created implementation of the complete `RunRegistry` transactional port for embedded
+composition. Service, API, and local-worker consumers depend on that port rather than the concrete
+SQLite class. Cross-instance contract evidence
 submits through one independently constructed application, claims and atomically completes through a
 second, then reads the succeeded job and immutable report through the first. Keeping the complete
 registry transaction behind this injection seam avoids a claim-only adapter that could split job state
-from run/report publication. The current injected implementation is still SQLite and does not establish
-multi-process, multi-host, or high-availability safety.
+from run/report publication. Health diagnostics identify the backend and explicitly report whether it
+is multi-host safe; the bounded deployment smoke rejects responses that omit either field. The current
+built-in implementation reports SQLite as not multi-host safe and does not establish multi-process,
+multi-host, or high-availability safety.
 
 ## Control-plane direction
 

@@ -378,7 +378,15 @@ class _SmokeHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self.requests.append(("GET", self.path, None))
-        self._respond({"api_version": "v1", "status": "ok", "storage_schema_version": 1})
+        self._respond(
+            {
+                "api_version": "v1",
+                "status": "ok",
+                "storage_schema_version": 1,
+                "storage_backend": "sqlite",
+                "multi_host_safe": False,
+            }
+        )
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -403,6 +411,20 @@ class _WrongStatusSmokeHandler(_SmokeHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
+
+
+class _LegacyHealthSmokeHandler(_SmokeHandler):
+    def do_GET(self) -> None:
+        self.requests.append(("GET", self.path, None))
+        self._respond({"api_version": "v1", "status": "ok", "storage_schema_version": 1})
+
+
+class _MalformedHealthSmokeHandler(_SmokeHandler):
+    health_payload: ClassVar[dict[str, object]]
+
+    def do_GET(self) -> None:
+        self.requests.append(("GET", self.path, None))
+        self._respond(self.health_payload)
 
 
 class _RedirectSmokeHandler(BaseHTTPRequestHandler):
@@ -436,8 +458,10 @@ def test_deployment_smoke_exercises_health_and_deterministic_evaluation() -> Non
 
     assert result == {
         "api_version": "v1",
+        "multi_host_safe": False,
         "release_ready": True,
         "run_id": "b" * 64,
+        "storage_backend": "sqlite",
         "storage_schema_version": 1,
     }
     assert [request[:2] for request in _SmokeHandler.requests] == [
@@ -469,8 +493,75 @@ def test_deployment_health_probe_avoids_mutating_persistent_state() -> None:
         server.server_close()
         thread.join(timeout=2)
 
-    assert result == {"api_version": "v1", "status": "ok", "storage_schema_version": 1}
+    assert result == {
+        "api_version": "v1",
+        "multi_host_safe": False,
+        "status": "ok",
+        "storage_backend": "sqlite",
+        "storage_schema_version": 1,
+    }
     assert _SmokeHandler.requests == [("GET", "/api/v1/health", None)]
+
+
+def test_deployment_smoke_rejects_health_without_storage_safety_capabilities() -> None:
+    from evalforge.deployment_smoke import run_smoke
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _LegacyHealthSmokeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(RuntimeError, match="deployment health response was invalid"):
+            run_smoke(
+                f"http://127.0.0.1:{server.server_port}",
+                timeout_seconds=2,
+                health_only=True,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("storage_backend", "multi_host_safe"),
+    (
+        (None, False),
+        ("", False),
+        ("SQLite", False),
+        ("sqlite!", False),
+        ("s" * 33, False),
+        ("sqlite", None),
+        ("sqlite", 0),
+        ("sqlite", "false"),
+    ),
+)
+def test_deployment_smoke_rejects_malformed_storage_safety_capabilities(
+    storage_backend: object,
+    multi_host_safe: object,
+) -> None:
+    from evalforge.deployment_smoke import run_smoke
+
+    _MalformedHealthSmokeHandler.health_payload = {
+        "api_version": "v1",
+        "status": "ok",
+        "storage_schema_version": 1,
+        "storage_backend": storage_backend,
+        "multi_host_safe": multi_host_safe,
+    }
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MalformedHealthSmokeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(RuntimeError, match="deployment health response was invalid"):
+            run_smoke(
+                f"http://127.0.0.1:{server.server_port}",
+                timeout_seconds=2,
+                health_only=True,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_deployment_smoke_rejects_success_payloads_with_wrong_creation_status() -> None:

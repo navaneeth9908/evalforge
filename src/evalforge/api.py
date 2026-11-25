@@ -33,10 +33,12 @@ from evalforge.registry import (
     ClaimedEvaluationJob,
     EvaluationJobLeaseDurationError,
     EvaluationJobLeaseNotFoundError,
+    RunRegistry,
     RunSummary,
     SQLiteRunRegistry,
     StoredEvaluationJob,
     StoredRun,
+    is_storage_backend_name,
 )
 from evalforge.service import (
     CaseEvidenceNotFoundError,
@@ -62,7 +64,16 @@ class HealthResponse(BaseModel):
 
     api_version: Literal["v1"] = "v1"
     status: Literal["ok"] = "ok"
-    storage_schema_version: int
+    storage_schema_version: int = Field(strict=True, ge=1)
+    storage_backend: str
+    multi_host_safe: bool = Field(strict=True)
+
+    @field_validator("storage_backend", mode="before")
+    @classmethod
+    def require_canonical_storage_backend(cls, value: object) -> object:
+        if not is_storage_backend_name(value):
+            raise ValueError("storage backend is invalid")
+        return value
 
 
 class ErrorDetail(BaseModel):
@@ -725,7 +736,7 @@ def _secure_dashboard_response(content: str) -> HTMLResponse:
 def create_app(
     database_path: Path | None = None,
     *,
-    registry: SQLiteRunRegistry | None = None,
+    registry: RunRegistry | None = None,
     access_credentials: tuple[AccessCredential, ...] | None = None,
     access_authenticator: BearerAuthenticator | None = None,
 ) -> FastAPI:
@@ -836,7 +847,12 @@ def create_app(
 
     @app.get("/api/v1/health", response_model=HealthResponse, tags=["health"])
     def health() -> HealthResponse:
-        return HealthResponse(storage_schema_version=registry.diagnostics().schema_version)
+        diagnostics = registry.diagnostics()
+        return HealthResponse(
+            storage_schema_version=diagnostics.schema_version,
+            storage_backend=diagnostics.backend,
+            multi_host_safe=diagnostics.multi_host_safe,
+        )
 
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
     def dashboard(

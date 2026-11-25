@@ -29,8 +29,8 @@ from evalforge.registry import (
 )
 from evalforge.registry import (
     EvaluationJobSuiteNotFoundError,
+    RunRegistry,
     RunSummary,
-    SQLiteRunRegistry,
     StoredEvaluationJob,
     StoredRun,
     StoredSuite,
@@ -272,7 +272,7 @@ def _evaluation_report_payload(
 class EvalForgeService:
     """Coordinate typed contracts, core evaluation, and local persistence."""
 
-    def __init__(self, registry: SQLiteRunRegistry) -> None:
+    def __init__(self, registry: RunRegistry) -> None:
         self.registry = registry
 
     def create_suite(self, suite: EvaluationSuite, *, tenant_id: str) -> StoredSuite:

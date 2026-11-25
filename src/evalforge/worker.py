@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from evalforge.registry import SQLiteRunRegistry, StoredEvaluationJob
+from evalforge.registry import RunRegistry, StoredEvaluationJob
 from evalforge.service import _evaluation_report_payload
 
 
@@ -12,7 +12,7 @@ from evalforge.service import _evaluation_report_payload
 class EvaluationWorker:
     """Claim and execute at most one deterministic evaluation job per invocation."""
 
-    registry: SQLiteRunRegistry
+    registry: RunRegistry
     worker_id: str
     lease_seconds: int = 60
     retry_backoff_seconds: int = 5

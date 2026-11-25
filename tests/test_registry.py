@@ -146,6 +146,8 @@ def test_registry_applies_migrations_and_safe_connection_defaults(tmp_path: Path
 
     diagnostics = registry.diagnostics()
     assert diagnostics.schema_version == 6
+    assert diagnostics.backend == "sqlite"
+    assert diagnostics.multi_host_safe is False
     assert diagnostics.foreign_keys is True
     assert diagnostics.journal_mode == "wal"
     assert diagnostics.busy_timeout_ms == 5_000
@@ -172,6 +174,45 @@ def test_registry_applies_migrations_and_safe_connection_defaults(tmp_path: Path
         "reports",
         "evaluation_jobs",
     } <= tables
+
+
+def test_backend_neutral_registry_diagnostics_do_not_require_sqlite_settings() -> None:
+    from evalforge.registry import RegistryDiagnostics
+
+    diagnostics = RegistryDiagnostics(
+        schema_version=1,
+        backend="postgresql",
+        multi_host_safe=True,
+    )
+
+    assert diagnostics.backend == "postgresql"
+    assert diagnostics.multi_host_safe is True
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "backend", "multi_host_safe"),
+    (
+        (0, "postgresql", True),
+        (1, "", True),
+        (1, "PostgreSQL", True),
+        (1, "postgresql!", True),
+        (1, "p" * 33, True),
+        (1, "postgresql", 1),
+    ),
+)
+def test_registry_diagnostics_reject_invalid_backend_capabilities(
+    schema_version: object,
+    backend: object,
+    multi_host_safe: object,
+) -> None:
+    from evalforge.registry import RegistryDiagnostics
+
+    with pytest.raises(ValueError, match="registry diagnostics are invalid"):
+        RegistryDiagnostics(
+            schema_version=schema_version,  # type: ignore[arg-type]
+            backend=backend,  # type: ignore[arg-type]
+            multi_host_safe=multi_host_safe,  # type: ignore[arg-type]
+        )
 
 
 def test_evaluation_job_submission_is_idempotent_and_tenant_scoped(tmp_path: Path) -> None:

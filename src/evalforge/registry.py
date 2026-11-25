@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, Protocol, TypeGuard, cast
 
 from evalforge.auth import TRUSTED_LOCAL_TENANT_ID
 from evalforge.contracts import CandidateOutput, EvaluationSuite
@@ -24,6 +24,19 @@ from evalforge.provenance import (
 )
 
 _BUSY_TIMEOUT_MS = 5_000
+
+
+def is_storage_backend_name(value: object) -> TypeGuard[str]:
+    """Return whether a value is one bounded canonical storage-backend identifier."""
+
+    return (
+        type(value) is str
+        and 1 <= len(value) <= 32
+        and value[0] in "abcdefghijklmnopqrstuvwxyz0123456789"
+        and all(character in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in value)
+    )
+
+
 _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
     (
         1,
@@ -380,9 +393,26 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
 
 @dataclass(frozen=True)
 class RegistryDiagnostics:
-    """Applied schema and effective connection-safety settings."""
+    """Backend-neutral schema and deployment-safety capabilities."""
 
     schema_version: int
+    backend: str
+    multi_host_safe: bool
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.schema_version) is not int
+            or self.schema_version < 1
+            or not is_storage_backend_name(self.backend)
+            or type(self.multi_host_safe) is not bool
+        ):
+            raise ValueError("registry diagnostics are invalid")
+
+
+@dataclass(frozen=True)
+class SQLiteRegistryDiagnostics(RegistryDiagnostics):
+    """Backend-neutral capabilities plus effective SQLite connection settings."""
+
     foreign_keys: bool
     journal_mode: str
     busy_timeout_ms: int
@@ -498,6 +528,121 @@ class RenewedEvaluationJobLease:
     attempts: int
     lease_token: str
     lease_expires_at: str
+
+
+class RunRegistry(Protocol):
+    """Complete transactional persistence port used by API, service, and workers."""
+
+    def create_run(
+        self,
+        *,
+        tenant_id: str,
+        suite_name: str,
+        suite: JsonValue,
+        candidate: JsonValue,
+        report: JsonValue,
+    ) -> StoredRun: ...
+
+    def create_evaluation_job(
+        self,
+        *,
+        tenant_id: str,
+        suite_id: str,
+        candidate: JsonValue,
+        idempotency_key: str,
+    ) -> StoredEvaluationJob: ...
+
+    def get_evaluation_job(
+        self,
+        *,
+        tenant_id: str,
+        job_id: str,
+    ) -> StoredEvaluationJob | None: ...
+
+    def claim_evaluation_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+        tenant_id: str | None = None,
+    ) -> ClaimedEvaluationJob | None: ...
+
+    def renew_evaluation_job_lease(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+        tenant_id: str | None = None,
+    ) -> RenewedEvaluationJobLease: ...
+
+    def retry_evaluation_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        backoff_seconds: int,
+        tenant_id: str | None = None,
+    ) -> StoredEvaluationJob: ...
+
+    def complete_evaluation_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        report: JsonValue,
+        tenant_id: str | None = None,
+    ) -> StoredEvaluationJob: ...
+
+    def fail_evaluation_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        failure_code: Literal["invalid_evaluation"],
+        tenant_id: str | None = None,
+    ) -> StoredEvaluationJob: ...
+
+    def create_suite(self, *, tenant_id: str, name: str, suite: JsonValue) -> StoredSuite: ...
+
+    def get_suite(self, *, tenant_id: str, suite_id: str) -> StoredSuite | None: ...
+
+    def list_suites(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[StoredSuite, ...]: ...
+
+    def count_suites(self, *, tenant_id: str) -> int: ...
+
+    def get_run(self, *, tenant_id: str, run_id: str) -> StoredRun | None: ...
+
+    def list_runs(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[RunSummary, ...]: ...
+
+    def count_runs(self, *, tenant_id: str) -> int: ...
+
+    def list_compatible_runs(
+        self,
+        *,
+        tenant_id: str,
+        suite_sha256: str,
+        dataset_manifest_sha256: str | None,
+        limit: int,
+    ) -> tuple[StoredRun, ...]: ...
+
+    def diagnostics(self) -> RegistryDiagnostics: ...
 
 
 class SQLiteRunRegistry:
@@ -1537,7 +1682,7 @@ class SQLiteRunRegistry:
             connection.close()
         return tuple(_stored_run(row) for row in rows)
 
-    def diagnostics(self) -> RegistryDiagnostics:
+    def diagnostics(self) -> SQLiteRegistryDiagnostics:
         """Read the applied migration and effective SQLite safety defaults."""
 
         connection = self._connect()
@@ -1551,8 +1696,10 @@ class SQLiteRunRegistry:
             synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
         finally:
             connection.close()
-        return RegistryDiagnostics(
+        return SQLiteRegistryDiagnostics(
             schema_version=int(schema_version),
+            backend="sqlite",
+            multi_host_safe=False,
             foreign_keys=bool(foreign_keys),
             journal_mode=str(journal_mode),
             busy_timeout_ms=int(busy_timeout_ms),

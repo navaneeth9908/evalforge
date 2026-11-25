@@ -9,6 +9,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from evalforge.registry import is_storage_backend_name
+
 _MAX_RESPONSE_BYTES = 65_536
 
 
@@ -124,16 +126,22 @@ def run_smoke(
         expected_status=200,
     )
     storage_version = health.get("storage_schema_version")
+    storage_backend = health.get("storage_backend")
+    multi_host_safe = health.get("multi_host_safe")
     if (
         health.get("api_version") != "v1"
         or health.get("status") != "ok"
         or type(storage_version) is not int
         or storage_version < 1
+        or not is_storage_backend_name(storage_backend)
+        or type(multi_host_safe) is not bool
     ):
         raise RuntimeError("deployment health response was invalid")
     result: dict[str, object] = {
         "api_version": "v1",
         "storage_schema_version": storage_version,
+        "storage_backend": storage_backend,
+        "multi_host_safe": multi_host_safe,
     }
     if health_only:
         result["status"] = "ok"

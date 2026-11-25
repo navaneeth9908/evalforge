@@ -22,6 +22,10 @@ one transactional registry boundary for contract testing and embedding. It is no
 SQLite deployment pattern, and a shared filesystem or network-mounted SQLite file is not supported as
 a substitute for a transactional multi-host backend.
 
+`GET /api/v1/health` identifies the storage backend and returns a strict `multi_host_safe` Boolean.
+The built-in SQLite backend reports `false`; `evalforge-smoke` rejects health responses that omit or
+malform either capability field. An `ok` API status therefore does not imply replica-safe storage.
+
 Verify health and the dashboard from another shell:
 
 ```bash

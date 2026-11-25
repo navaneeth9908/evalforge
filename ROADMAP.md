@@ -100,6 +100,7 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [x] Supervised authenticated remote worker service with graceful termination and bounded idle smoke mode
   - [ ] Multi-host distribution and horizontally safe queue backend
     - [x] Explicit shared-registry injection with cross-instance submission, claim, completion, and read evidence
+    - [x] Backend-neutral transactional registry port with explicit multi-host safety diagnostics
     - [ ] Transactional multi-host registry implementation and replica-safe deployment
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics

@@ -31,6 +31,8 @@ def test_health_endpoint_reports_versioned_service_readiness(tmp_path: Path) -> 
         "api_version": "v1",
         "status": "ok",
         "storage_schema_version": 6,
+        "storage_backend": "sqlite",
+        "multi_host_safe": False,
     }
 
 
