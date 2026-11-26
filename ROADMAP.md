@@ -101,6 +101,7 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
   - [ ] Multi-host distribution and horizontally safe queue backend
     - [x] Explicit shared-registry injection with cross-instance submission, claim, completion, and read evidence
     - [x] Backend-neutral transactional registry port with explicit multi-host safety diagnostics
+    - [x] Replica-safety deployment smoke gate that rejects unsafe backends before mutation
     - [ ] Transactional multi-host registry implementation and replica-safe deployment
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics

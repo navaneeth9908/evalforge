@@ -30,6 +30,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Supervised authenticated remote worker mode with bounded polling, graceful supported-console termination, finite idle-drain smokes, and redacted operational JSON.
 - Explicit shared-registry API composition with fail-closed source selection and cross-instance worker lifecycle evidence.
 - Backend-neutral transactional registry typing plus fail-closed health and deployment-smoke evidence for storage backend identity and multi-host safety.
+- Opt-in replica-safety deployment smoke gating that rejects declared-unsafe storage before mutation.
 
 ### Security
 

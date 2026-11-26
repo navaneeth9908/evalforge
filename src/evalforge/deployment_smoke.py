@@ -113,6 +113,7 @@ def run_smoke(
     *,
     timeout_seconds: float = 5.0,
     health_only: bool = False,
+    require_multi_host_safe: bool = False,
 ) -> dict[str, object]:
     """Verify readiness and, unless disabled, one deterministic evaluation round trip."""
     if not 0 < timeout_seconds <= 30:
@@ -137,6 +138,8 @@ def run_smoke(
         or type(multi_host_safe) is not bool
     ):
         raise RuntimeError("deployment health response was invalid")
+    if require_multi_host_safe and not multi_host_safe:
+        raise RuntimeError("deployment requires a multi-host-safe registry")
     result: dict[str, object] = {
         "api_version": "v1",
         "storage_schema_version": storage_version,
@@ -180,11 +183,13 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--timeout-seconds", type=float, default=5.0)
     parser.add_argument("--health-only", action="store_true")
+    parser.add_argument("--require-multi-host-safe", action="store_true")
     arguments = parser.parse_args()
     result = run_smoke(
         arguments.base_url,
         timeout_seconds=arguments.timeout_seconds,
         health_only=arguments.health_only,
+        require_multi_host_safe=arguments.require_multi_host_safe,
     )
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 

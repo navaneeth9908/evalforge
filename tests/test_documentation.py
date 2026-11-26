@@ -194,6 +194,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     assert "- [ ] Multi-host distribution and horizontally safe queue backend" in roadmap
     assert "- [x] Explicit shared-registry injection" in roadmap
     assert "- [x] Backend-neutral transactional registry port" in roadmap
+    assert "- [x] Replica-safety deployment smoke gate" in roadmap
     assert "- [ ] Transactional multi-host registry implementation" in roadmap
     assert "one-shot `EvaluationWorker`" in readme
     assert "terminally classifies invalid evaluation input" in readme
@@ -208,6 +209,7 @@ def test_release_documentation_is_complete_and_truthful() -> None:
     deployment = (ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
     assert "--factory evalforge.server:create_app_from_environment" in deployment
     assert "evalforge-smoke --base-url http://127.0.0.1:8000" in deployment
+    assert "--require-multi-host-safe" in deployment
     assert "evalforge-worker --database-path" in deployment
     assert "--serve --poll-interval-seconds 2" in deployment
     assert "POST /api/v1/worker-claims" in deployment

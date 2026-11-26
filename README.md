@@ -73,6 +73,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Strict, versioned dataset manifests with lineage and suite-integrity validation
 - Transactional SQLite run registry with immutable, content-addressed suite and report evidence
 - Backend-neutral transactional registry port with explicit storage-backend and multi-host-safety health evidence
+- Opt-in replica-safety deployment smoke gate that rejects unsafe storage before mutation
 - Versioned FastAPI endpoints for suite creation, evaluation, run history, and report retrieval
 - Read-only local run dashboard with escaped metadata and no candidate-text rendering
 - Tenant-scoped pairwise run comparison with weighted regressions, case evidence, and category/tag slice deltas
@@ -210,8 +211,11 @@ with `create_app(registry=registry)`; the factory requires exactly one of
 same transactional registry boundary without splitting job completion from run/report publication.
 The built-in `SQLiteRunRegistry` reports `storage_backend: "sqlite"` and
 `multi_host_safe: false` from health. The deployment smoke requires both fields instead of inferring
-distributed safety from API readiness. This composition seam does not make SQLite a horizontally
-safe or multi-host backend, and no transactional multi-host implementation ships yet.
+distributed safety from API readiness. Replica deployments can add
+`evalforge-smoke --health-only --require-multi-host-safe`; the probe rejects a declared-unsafe
+backend before creating suites or runs. The flag enforces backend self-attestation and does not prove
+locking, durability, or failover. This composition seam does not make SQLite a horizontally safe or
+multi-host backend, and no transactional multi-host implementation ships yet.
 
 The versioned `/api/v1` surface provides health, suite creation/listing, synchronous evaluation,
 durable `POST /api/v1/evaluation-jobs` submission, tenant-scoped job polling, run history, and

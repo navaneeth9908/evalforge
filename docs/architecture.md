@@ -119,9 +119,11 @@ submits through one independently constructed application, claims and atomically
 second, then reads the succeeded job and immutable report through the first. Keeping the complete
 registry transaction behind this injection seam avoids a claim-only adapter that could split job state
 from run/report publication. Health diagnostics identify the backend and explicitly report whether it
-is multi-host safe; the bounded deployment smoke rejects responses that omit either field. The current
-built-in implementation reports SQLite as not multi-host safe and does not establish multi-process,
-multi-host, or high-availability safety.
+is multi-host safe; the bounded deployment smoke rejects responses that omit either field. Its opt-in
+replica-safety gate also rejects a declared-unsafe backend before any smoke mutation, without treating
+the backend name as evidence. This self-attestation gate does not prove isolation or failover. The
+current built-in implementation reports SQLite as not multi-host safe and does not establish
+multi-process, multi-host, or high-availability safety.
 
 ## Control-plane direction
 

@@ -25,6 +25,16 @@ a substitute for a transactional multi-host backend.
 `GET /api/v1/health` identifies the storage backend and returns a strict `multi_host_safe` Boolean.
 The built-in SQLite backend reports `false`; `evalforge-smoke` rejects health responses that omit or
 malform either capability field. An `ok` API status therefore does not imply replica-safe storage.
+For a replica-oriented deployment gate, require the backend declaration explicitly:
+
+```bash
+uv run --frozen evalforge-smoke \
+  --base-url http://127.0.0.1:8000 --health-only --require-multi-host-safe
+```
+
+The probe rejects `multi_host_safe: false` before any suite or run mutation. This is a fail-closed
+contract gate over backend self-attestation, not proof of transaction isolation, failover, or
+durability; the built-in SQLite deployment intentionally fails it.
 
 Verify health and the dashboard from another shell:
 

@@ -427,6 +427,20 @@ class _MalformedHealthSmokeHandler(_SmokeHandler):
         self._respond(self.health_payload)
 
 
+class _MultiHostSafeSmokeHandler(_SmokeHandler):
+    def do_GET(self) -> None:
+        self.requests.append(("GET", self.path, None))
+        self._respond(
+            {
+                "api_version": "v1",
+                "status": "ok",
+                "storage_schema_version": 1,
+                "storage_backend": "postgresql",
+                "multi_host_safe": True,
+            }
+        )
+
+
 class _RedirectSmokeHandler(BaseHTTPRequestHandler):
     target_origin: ClassVar[str]
 
@@ -500,6 +514,89 @@ def test_deployment_health_probe_avoids_mutating_persistent_state() -> None:
         "storage_backend": "sqlite",
         "storage_schema_version": 1,
     }
+    assert _SmokeHandler.requests == [("GET", "/api/v1/health", None)]
+
+
+def test_replica_safe_smoke_accepts_declared_multi_host_safe_registry() -> None:
+    from evalforge.deployment_smoke import run_smoke
+
+    _MultiHostSafeSmokeHandler.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MultiHostSafeSmokeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = run_smoke(
+            f"http://127.0.0.1:{server.server_port}",
+            timeout_seconds=2,
+            health_only=True,
+            require_multi_host_safe=True,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert result["storage_backend"] == "postgresql"
+    assert result["multi_host_safe"] is True
+    assert _MultiHostSafeSmokeHandler.requests == [("GET", "/api/v1/health", None)]
+
+
+def test_replica_safe_smoke_rejects_unsafe_registry_before_mutating_state() -> None:
+    from evalforge.deployment_smoke import run_smoke
+
+    _MalformedHealthSmokeHandler.requests = []
+    _MalformedHealthSmokeHandler.health_payload = {
+        "api_version": "v1",
+        "status": "ok",
+        "storage_schema_version": 1,
+        "storage_backend": "postgresql",
+        "multi_host_safe": False,
+    }
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MalformedHealthSmokeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(RuntimeError, match="requires a multi-host-safe registry"):
+            run_smoke(
+                f"http://127.0.0.1:{server.server_port}",
+                timeout_seconds=2,
+                require_multi_host_safe=True,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert _MalformedHealthSmokeHandler.requests == [("GET", "/api/v1/health", None)]
+
+
+def test_deployment_smoke_cli_enforces_multi_host_safety(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evalforge.deployment_smoke import main
+
+    _SmokeHandler.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _SmokeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evalforge-smoke",
+            "--base-url",
+            f"http://127.0.0.1:{server.server_port}",
+            "--health-only",
+            "--require-multi-host-safe",
+        ],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="requires a multi-host-safe registry"):
+            main()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
     assert _SmokeHandler.requests == [("GET", "/api/v1/health", None)]
 
 
