@@ -31,6 +31,7 @@ All notable changes to EvalForge are documented here. The format follows [Keep a
 - Explicit shared-registry API composition with fail-closed source selection and cross-instance worker lifecycle evidence.
 - Backend-neutral transactional registry typing plus fail-closed health and deployment-smoke evidence for storage backend identity and multi-host safety.
 - Opt-in replica-safety deployment smoke gating that rejects declared-unsafe storage before mutation.
+- Advisory-locked PostgreSQL schema-v1 bootstrap with strict migration validation, immutable evidence tables, constrained job state, and concurrent PostgreSQL integration coverage. This does not add a PostgreSQL `RunRegistry` adapter or server backend selection.
 
 ### Security
 

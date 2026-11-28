@@ -125,6 +125,14 @@ the backend name as evidence. This self-attestation gate does not prove isolatio
 current built-in implementation reports SQLite as not multi-host safe and does not establish
 multi-process, multi-host, or high-availability safety.
 
+The PostgreSQL module currently provides schema bootstrap only. A caller-owned idle DB-API connection
+starts one transaction, takes a fixed transaction-scoped advisory lock before schema mutation, validates
+a contiguous known migration history, applies schema v1 once, and verifies all required tables before
+commit. Schema v1 uses `timestamptz`, `jsonb`, foreign keys, bounded job-state checks, indexes, and
+update/delete rejection triggers for immutable evidence and membership tables. The module accepts no
+DSN and is not a complete `RunRegistry`; API/worker composition, queue operations, server backend
+selection, replica safety, and deployment remain unimplemented.
+
 ## Control-plane direction
 
 ```mermaid

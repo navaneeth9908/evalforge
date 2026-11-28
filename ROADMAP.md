@@ -103,6 +103,8 @@ These capabilities remain open and are not claims of the `v0.2.0` release.
     - [x] Backend-neutral transactional registry port with explicit multi-host safety diagnostics
     - [x] Replica-safety deployment smoke gate that rejects unsafe backends before mutation
     - [ ] Transactional multi-host registry implementation and replica-safe deployment
+      - [x] Advisory-locked PostgreSQL schema bootstrap with concurrent integration coverage
+      - [ ] Complete PostgreSQL RunRegistry semantics and replica-safe deployment
 - [ ] Postgres/object-storage adapters and retention controls
 - [ ] OpenTelemetry traces and service-level operational metrics
 - [ ] Signed release artifacts, SBOM publication, and provenance attestations

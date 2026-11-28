@@ -74,6 +74,7 @@ AI systems need more than a few hand-checked prompts before release. Teams need 
 - Transactional SQLite run registry with immutable, content-addressed suite and report evidence
 - Backend-neutral transactional registry port with explicit storage-backend and multi-host-safety health evidence
 - Opt-in replica-safety deployment smoke gate that rejects unsafe storage before mutation
+- Advisory-locked PostgreSQL registry schema bootstrap with strict migration and table validation
 - Versioned FastAPI endpoints for suite creation, evaluation, run history, and report retrieval
 - Read-only local run dashboard with escaped metadata and no candidate-text rendering
 - Tenant-scoped pairwise run comparison with weighted regressions, case evidence, and category/tag slice deltas
@@ -216,6 +217,12 @@ distributed safety from API readiness. Replica deployments can add
 backend before creating suites or runs. The flag enforces backend self-attestation and does not prove
 locking, durability, or failover. This composition seam does not make SQLite a horizontally safe or
 multi-host backend, and no transactional multi-host implementation ships yet.
+
+`initialize_postgres_registry_schema(connection)` can bootstrap the PostgreSQL schema foundation from
+an idle caller-owned DB-API connection. It uses one transaction and a transaction-scoped advisory lock,
+then validates migration history and required tables. It accepts no DSN and retains no connection.
+This is schema bootstrap only: no PostgreSQL `RunRegistry` adapter, server backend selection, queue
+semantics, or replica-safe deployment ships yet.
 
 The versioned `/api/v1` surface provides health, suite creation/listing, synchronous evaluation,
 durable `POST /api/v1/evaluation-jobs` submission, tenant-scoped job polling, run history, and

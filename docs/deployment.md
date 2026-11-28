@@ -36,6 +36,13 @@ The probe rejects `multi_host_safe: false` before any suite or run mutation. Thi
 contract gate over backend self-attestation, not proof of transaction isolation, failover, or
 durability; the built-in SQLite deployment intentionally fails it.
 
+The development package includes `initialize_postgres_registry_schema(connection)` for bootstrapping
+the PostgreSQL registry tables through an idle caller-owned DB-API connection. It serializes migration
+work with a transaction-scoped advisory lock and fails closed on unsupported history or missing tables.
+This is not a deployment backend: no PostgreSQL `RunRegistry` adapter, DSN configuration, server
+selection, job operations, health declaration, migration command, or replica-safe topology ships yet.
+Do not point the current server or worker commands at PostgreSQL.
+
 Verify health and the dashboard from another shell:
 
 ```bash
